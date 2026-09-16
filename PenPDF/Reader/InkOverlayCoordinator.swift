@@ -130,36 +130,58 @@ final class InkOverlayCoordinator: NSObject, PDFPageOverlayViewProvider, PKCanva
         // result would otherwise apply to an overlay nothing displays
         // anymore (design note "cancel/ignore pending renders").
         renderGeneration[canvas.pageIndex, default: 0] += 1
+        pagesWithPenDown.remove(canvas.pageIndex)
         lastRenderScale.removeValue(forKey: canvas.pageIndex)
     }
 
     // MARK: - PKCanvasViewDelegate
 
+    /// Pages whose canvas currently has the pen down. PencilKit's delegate
+    /// order on pen-up is not guaranteed: `didEndUsingTool` can arrive
+    /// BEFORE the finished stroke is committed to `canvas.drawing` (and
+    /// before `drawingDidChange`). Rendering synchronously in `didEndUsingTool`
+    /// therefore produced an image without the new stroke, and the follow-up
+    /// `drawingDidChange` was ignored because the overlay was still in
+    /// `.drawing` mode — the stroke stayed hidden until the next pen-up
+    /// (owner-reported, 2026-09-16). Tracking pen state explicitly, deferring
+    /// the pen-up render one run-loop turn, and re-rendering on any drawing
+    /// change while the pen is up closes both orderings.
+    private var pagesWithPenDown: Set<Int> = []
+
     func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
         guard let canvas = canvasView as? PageCanvasView,
               let overlay = liveOverlays[canvas.pageIndex]
         else { return }
+        pagesWithPenDown.insert(canvas.pageIndex)
         overlay.setMode(.drawing)
     }
 
     func canvasViewDidEndUsingTool(_ canvasView: PKCanvasView) {
-        guard let canvas = canvasView as? PageCanvasView,
-              let overlay = liveOverlays[canvas.pageIndex],
-              let pdfView = currentPDFView
-        else { return }
-        // Pen up: re-render from the settled drawing, then (only once the
-        // new bitmap is ready) swap back to idle — no flash, no ghosting.
-        render(pageIndex: canvas.pageIndex, drawing: canvas.drawing, overlay: overlay, pdfView: pdfView, then: .idle)
+        guard let canvas = canvasView as? PageCanvasView else { return }
+        let pageIndex = canvas.pageIndex
+        pagesWithPenDown.remove(pageIndex)
+        // Next turn: by then PencilKit has committed the stroke. `drawing` is
+        // read inside the block on purpose. Generation counting in `render`
+        // makes any overlap with `drawingDidChange` harmless — latest wins.
+        DispatchQueue.main.async { [weak self, weak canvas] in
+            guard let self, let canvas,
+                  let overlay = self.liveOverlays[pageIndex], overlay.canvas === canvas,
+                  let pdfView = self.currentPDFView
+            else { return }
+            self.render(pageIndex: pageIndex, drawing: canvas.drawing, overlay: overlay, pdfView: pdfView, then: .idle)
+        }
     }
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
         guard let canvas = canvasView as? PageCanvasView else { return }
         store.update(canvas.drawing, forPage: canvas.pageIndex)
 
-        // Undo/redo/lasso-move from the toolbar mutate the drawing while the
-        // overlay is idle (no begin/endUsingTool bracket around them) — the
-        // design note calls this out explicitly as a re-render trigger.
-        guard let overlay = liveOverlays[canvas.pageIndex], overlay.mode == .idle,
+        // Any change while the pen is up — the just-finished stroke landing
+        // late, undo/redo, lasso move, object-eraser tap — must reach the
+        // image layer. While the pen is down the live canvas is showing, so
+        // rendering would be wasted; pen-up handles it.
+        guard !pagesWithPenDown.contains(canvas.pageIndex),
+              let overlay = liveOverlays[canvas.pageIndex],
               let pdfView = currentPDFView
         else { return }
         render(pageIndex: canvas.pageIndex, drawing: canvas.drawing, overlay: overlay, pdfView: pdfView, then: .idle)
