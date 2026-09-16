@@ -9,9 +9,12 @@ extension ReaderViewController {
 
     /// FR-18a, debug builds only: makes the Pencil (or the simulator's mouse)
     /// behave like a finger so a page can be scrolled without drawing on it.
+    /// S5: `pdfView.isInMarkupMode` is always `false` now (ink no longer
+    /// routes through PDFKit at all — see `ReaderViewController.viewDidLoad`)
+    /// so there is nothing to toggle there; `ink.canvas.isUserInteractionEnabled`
+    /// is the only switch.
     @objc func didTapDebugInkToggle() {
         ink.setInkEnabled(!ink.isInkEnabled, for: view)
-        pdfView.isInMarkupMode = ink.isInkEnabled
         if ink.isInkEnabled, !view.isFirstResponder {
             view.becomeFirstResponder()
         }

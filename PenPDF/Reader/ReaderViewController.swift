@@ -35,11 +35,6 @@ final class ReaderViewController: UIViewController {
     private var resignActiveObserver: NSObjectProtocol?
     private var backgroundObserver: NSObjectProtocol?
     private var scaleChangeObserver: NSObjectProtocol?
-    /// S2 (`spec/notes/S2-option-b-crisp-ink.md` "Re-render triggers"): the
-    /// 150 ms zoom-settle debounce before re-rendering ink bitmaps. Only a
-    /// bitmap is re-rendered on this timer, never geometry, so — unlike
-    /// spike S1's counter-transform — it cannot drift.
-    private var zoomSettleWork: DispatchWorkItem?
 
     // MARK: - Resize window (FR-10 / F1)
 
@@ -59,17 +54,16 @@ final class ReaderViewController: UIViewController {
 
     // MARK: - Ink (WP4)
 
-    /// One tool picker per Reader; every page's canvas observes it so they
-    /// all show the same selected tool.
+    /// One tool picker per Reader; the single screen canvas observes it.
     private let toolPicker = PKToolPicker()
-    let ink: InkOverlayCoordinator // internal for extensions (Position, Ink)
+    let ink: ScreenInkController // internal for extensions (Position, Ink)
 
-    /// PencilKit registers each stroke with the `UndoManager` it finds by
-    /// walking the responder chain from the canvas that drew it: canvas →
-    /// `pdfView` → `view` (`ResponderView`) → this controller. Overriding
-    /// `undoManager` here (below) means every page's canvas ends up sharing
-    /// this one manager, so Undo/Redo in the toolbar is deterministic no
-    /// matter which page was last drawn on.
+    /// S5: `ScreenCanvasView.undoManager` returns `nil`, so PencilKit never
+    /// registers its own undo actions for it (the canvas holds a transient
+    /// screen-space projection, not any one page's real drawing — see
+    /// `ScreenCanvasView`). `ScreenInkController` registers explicit,
+    /// page-scoped undo/redo against THIS manager instead, so the toolbar's
+    /// Undo/Redo stay deterministic no matter which page was last drawn on.
     private let readerUndoManager = UndoManager()
 
     // MARK: - Lock (WP5)
@@ -97,7 +91,13 @@ final class ReaderViewController: UIViewController {
         self.securityScoped = securityScoped
         let store = DocumentStore(key: DocumentIdentity.key(for: fileURL))
         self.store = store
-        self.ink = InkOverlayCoordinator(document: document, store: store, toolPicker: toolPicker)
+        self.ink = ScreenInkController(
+            pdfView: pdfView,
+            document: document,
+            store: store,
+            toolPicker: toolPicker,
+            undoManager: readerUndoManager
+        )
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -120,7 +120,6 @@ final class ReaderViewController: UIViewController {
             NotificationCenter.default.removeObserver(scaleChangeObserver)
         }
         resizeWindowEnd?.cancel()
-        zoomSettleWork?.cancel()
         if securityScoped {
             fileURL.stopAccessingSecurityScopedResource()
         }
@@ -148,6 +147,21 @@ final class ReaderViewController: UIViewController {
             pdfView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
 
+        // S5 (`spec/notes/S5-screen-canvas.md`): the ink canvas is a SIBLING
+        // above `pdfView`, never a descendant of it — a `PKCanvasView` inside
+        // PDFKit's transformed view tree is bitmap-magnified by PDFKit's
+        // ancestor transform at any zoom, with no supported workaround
+        // (Apple DTS, see `deferred.md`). Same frame as `pdfView` (full-bleed,
+        // FR-31), added after it so it draws on top.
+        ink.canvas.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(ink.canvas)
+        NSLayoutConstraint.activate([
+            ink.canvas.topAnchor.constraint(equalTo: view.topAnchor),
+            ink.canvas.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            ink.canvas.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            ink.canvas.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+
         // §5.5, exact.
         pdfView.displayMode = .singlePageContinuous
         pdfView.displayDirection = .vertical
@@ -156,17 +170,16 @@ final class ReaderViewController: UIViewController {
         pdfView.pageShadowsEnabled = false
         pdfView.interpolationQuality = .high
         pdfView.backgroundColor = .secondarySystemBackground
-        // WP4: overlay provider must be set before `document` so PDFKit asks
-        // for canvases as pages are first laid out (SPEC §5.5).
-        pdfView.pageOverlayViewProvider = ink
-        // WP4: confirmed present in the iOS 17+ SDK (PDFView.h) — routes
-        // Pencil input to the overlay canvases rather than PDFKit's own
-        // markup/selection handling.
-        pdfView.isInMarkupMode = true
+        // S5: no `PDFPageOverlayViewProvider` and no markup-mode routing
+        // anymore — ink lives in `ink.canvas`, a sibling above `pdfView`, and
+        // gets Pencil input directly via `ScreenCanvasView.hitTest`, so
+        // PDFKit's own markup/selection handling is left at its default
+        // (off), same as a plain read-only PDFView.
+        pdfView.isInMarkupMode = false
         pdfView.document = pdfDocument
-        // S2 (`spec/notes/S2-option-b-crisp-ink.md`): prime ink render scale
-        // for the initial layout; a no-op when there's nothing to render yet.
-        ink.rerenderForZoom(in: pdfView)
+        // S5: build the initial screen-space projection of the document's
+        // ink now that `pdfView` has a document and a first layout is coming.
+        ink.setNeedsSync()
 
         configureScrollViews(in: pdfView)
 
@@ -218,18 +231,13 @@ final class ReaderViewController: UIViewController {
             queue: .main
         ) { [weak self] _ in
             guard let self else { return }
-            // S2 (`spec/notes/S2-option-b-crisp-ink.md` "Re-render triggers"):
-            // wait for 150 ms of quiet before re-rendering ink bitmaps — a
-            // pinch fires this repeatedly, and re-rendering on every tick
-            // would be wasted work (and fight the in-flight generation
-            // bookkeeping in `InkOverlayCoordinator.render`).
-            self.zoomSettleWork?.cancel()
-            let work = DispatchWorkItem { [weak self] in
-                guard let self else { return }
-                self.ink.rerenderForZoom(in: self.pdfView)
-            }
-            self.zoomSettleWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+            // S5: the ink canvas is rendered at native screen resolution
+            // regardless of PDF zoom (it's a sibling above `pdfView`, never
+            // magnified by PDFKit's ancestor transform), so — unlike S2's
+            // bitmap re-render — there is no blur to wait out. Re-sync every
+            // frame; `ScreenInkController.setNeedsSync()` coalesces a pinch's
+            // rapid-fire notifications into one sync per run-loop turn.
+            self.ink.setNeedsSync()
             guard self.resizePin != nil else { return }
             DispatchQueue.main.async { [weak self] in
                 self?.applyResizePin()
@@ -251,10 +259,12 @@ final class ReaderViewController: UIViewController {
         view.becomeFirstResponder()
     }
 
-    /// Every page's canvas resolves `undoManager` by walking the responder
-    /// chain (canvas → `pdfView` → `view` → here); owning one instance makes
-    /// Undo/Redo deterministic across all pages instead of each canvas
-    /// getting its own transient manager (see `readerUndoManager` above).
+    /// The toolbar's Undo/Redo buttons act on this manager directly
+    /// (`didTapUndo`/`didTapRedo`); `ScreenInkController` was handed the same
+    /// instance at init and registers its page-scoped undo actions there
+    /// (see `readerUndoManager` above) — overriding the responder-chain
+    /// property here just keeps this controller's own `UIResponder.undoManager`
+    /// consistent with it.
     override var undoManager: UndoManager? { readerUndoManager }
 
     override func viewDidLayoutSubviews() {
@@ -263,9 +273,10 @@ final class ReaderViewController: UIViewController {
         // PDFKit may recreate its internal scroll view on layout; re-assert
         // this every time rather than once (§5.5 footnote, FR-10 / P3).
         configureScrollViews(in: pdfView)
-        // S2: cheap and idempotent — catches any layout-driven zoom change
-        // `.PDFViewScaleChanged` might not fire for.
-        ink.rerenderForZoom(in: pdfView)
+        // S5: cheap and coalesced — catches any layout-driven page/zoom
+        // change `.PDFViewScaleChanged`/`.PDFViewPageChanged` might not fire
+        // for (e.g. a resize).
+        ink.setNeedsSync()
 
         // FR-31 / §7: register PDFKit's own scroll view with the navigation
         // controller so it applies the scroll-edge glass effect (the bar
@@ -382,19 +393,25 @@ final class ReaderViewController: UIViewController {
     /// FR-31 / §7: also sets `contentInsetAdjustmentBehavior = .always` on
     /// each one so page 1 starts below the glass bar and the last page
     /// clears the home indicator, now that `pdfView` is pinned to `view`'s
-    /// top/bottom edges instead of the safe area — `PKCanvasView` (the
-    /// per-page ink overlays) is skipped for that part, since `§5.6` pins it
-    /// to `.never` so ink stays registered to unrotated page points; it still
-    /// gets `scrollsToTop = false` like everything else.
+    /// top/bottom edges instead of the safe area. S5: the ink canvas
+    /// (`ink.canvas`, a `ScreenCanvasView`) is a SIBLING of `pdfView`, not a
+    /// descendant of it anymore, so every scroll view this walk finds is
+    /// genuinely PDFKit's own — no `PKCanvasView` exclusion needed (unlike
+    /// pre-S5, where per-page canvases lived inside this very tree).
+    ///
+    /// FR-32: also requires **two fingers** to pan (`panGestureRecognizer
+    /// .minimumNumberOfTouches = 2`) — a resting palm is one large
+    /// single-touch and, pre-S5, drifted the page exactly like in Preview;
+    /// pinch-to-zoom is already two-finger. Lock mode (§3.5) remains the
+    /// total-immunity option.
     ///
     /// Called after `document` is set and again on every layout pass, since
     /// PDFKit can recreate its scroll view internals.
     private func configureScrollViews(in view: UIView) {
         if let scrollView = view as? UIScrollView {
             scrollView.scrollsToTop = false
-            if !(scrollView is PKCanvasView) {
-                scrollView.contentInsetAdjustmentBehavior = .always
-            }
+            scrollView.contentInsetAdjustmentBehavior = .always
+            scrollView.panGestureRecognizer.minimumNumberOfTouches = 2
         }
         for subview in view.subviews {
             configureScrollViews(in: subview)
@@ -402,9 +419,7 @@ final class ReaderViewController: UIViewController {
     }
 
     /// FR-31 / §7: the first `UIScrollView` found under `pdfView` — PDFKit's
-    /// own internal scroll view, encountered before it descends into page
-    /// content (and any per-page `PKCanvasView` overlays) — for
-    /// `setContentScrollView` registration.
+    /// own internal scroll view — for `setContentScrollView` registration.
     private func firstScrollView(in view: UIView) -> UIScrollView? {
         if let scrollView = view as? UIScrollView {
             return scrollView
