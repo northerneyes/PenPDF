@@ -48,12 +48,10 @@ for k in (1, 2):
     fx = x0 + w * k // 3
     line([(fx, ferrule_bot), (fx, cone_top)])
 # facet ends bulging into the cone
-bump = int(48 * S)
+bump = int(34 * S)
 for k in range(3):
     xa, xb = x0 + w * k // 3, x0 + w * (k + 1) // 3
     d.arc([xa, cone_top - bump, xb, cone_top + bump], 0, 180, fill=BLACK, width=lw)
-# lead edge
-line([(cx - lx, bottom - lead_h), (cx + lx, bottom - lead_h)])
 
 L = L.rotate(-45, resample=Image.BICUBIC, center=(cx, N // 2))
 bg.alpha_composite(L)
