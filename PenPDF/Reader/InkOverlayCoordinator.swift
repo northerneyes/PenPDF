@@ -131,28 +131,38 @@ final class InkOverlayCoordinator: NSObject, PDFPageOverlayViewProvider, PKCanva
         // anymore (design note "cancel/ignore pending renders").
         renderGeneration[canvas.pageIndex, default: 0] += 1
         pagesWithPenDown.remove(canvas.pageIndex)
+        pagesChangedWhilePenDown.remove(canvas.pageIndex)
+        idleFallbacks.removeValue(forKey: canvas.pageIndex)?.cancel()
         lastRenderScale.removeValue(forKey: canvas.pageIndex)
     }
 
     // MARK: - PKCanvasViewDelegate
 
-    /// Pages whose canvas currently has the pen down. PencilKit's delegate
-    /// order on pen-up is not guaranteed: `didEndUsingTool` can arrive
-    /// BEFORE the finished stroke is committed to `canvas.drawing` (and
-    /// before `drawingDidChange`). Rendering synchronously in `didEndUsingTool`
-    /// therefore produced an image without the new stroke, and the follow-up
-    /// `drawingDidChange` was ignored because the overlay was still in
-    /// `.drawing` mode — the stroke stayed hidden until the next pen-up
-    /// (owner-reported, 2026-09-16). Tracking pen state explicitly, deferring
-    /// the pen-up render one run-loop turn, and re-rendering on any drawing
-    /// change while the pen is up closes both orderings.
+    /// Pen-state bookkeeping. PencilKit's delegate ordering around pen-up is
+    /// not guaranteed and differs by tool: the pen commits the finished stroke
+    /// to `drawing` in the same turn as `didEndUsingTool`, but the eraser
+    /// commits ASYNCHRONOUSLY (stroke splitting happens off-thread), so any
+    /// render triggered from pen-up — even one turn later — can still see the
+    /// pre-erase drawing, show the erased strokes for a frame, then get
+    /// corrected by the late `drawingDidChange` (owner-reported flicker,
+    /// 2026-09-16). Rule: never render speculatively at pen-up. Render when
+    /// the model actually changed (`drawingDidChange` with the pen up, or at
+    /// pen-up if a change already arrived mid-gesture); if nothing changes at
+    /// all (eraser on empty space, lasso tap) a short fallback returns the
+    /// overlay to idle — the existing image is still valid.
     private var pagesWithPenDown: Set<Int> = []
+    private var pagesChangedWhilePenDown: Set<Int> = []
+    private var idleFallbacks: [Int: DispatchWorkItem] = [:]
+    private static let idleFallbackDelay: TimeInterval = 0.25
 
     func canvasViewDidBeginUsingTool(_ canvasView: PKCanvasView) {
         guard let canvas = canvasView as? PageCanvasView,
               let overlay = liveOverlays[canvas.pageIndex]
         else { return }
-        pagesWithPenDown.insert(canvas.pageIndex)
+        let pageIndex = canvas.pageIndex
+        pagesWithPenDown.insert(pageIndex)
+        pagesChangedWhilePenDown.remove(pageIndex)
+        idleFallbacks.removeValue(forKey: pageIndex)?.cancel()
         overlay.setMode(.drawing)
     }
 
@@ -160,31 +170,44 @@ final class InkOverlayCoordinator: NSObject, PDFPageOverlayViewProvider, PKCanva
         guard let canvas = canvasView as? PageCanvasView else { return }
         let pageIndex = canvas.pageIndex
         pagesWithPenDown.remove(pageIndex)
-        // Next turn: by then PencilKit has committed the stroke. `drawing` is
-        // read inside the block on purpose. Generation counting in `render`
-        // makes any overlap with `drawingDidChange` harmless — latest wins.
-        DispatchQueue.main.async { [weak self, weak canvas] in
-            guard let self, let canvas,
-                  let overlay = self.liveOverlays[pageIndex], overlay.canvas === canvas,
-                  let pdfView = self.currentPDFView
-            else { return }
-            self.render(pageIndex: pageIndex, drawing: canvas.drawing, overlay: overlay, pdfView: pdfView, then: .idle)
+
+        if pagesChangedWhilePenDown.remove(pageIndex) != nil {
+            // The model already changed during the gesture: render it now.
+            guard let overlay = liveOverlays[pageIndex], let pdfView = currentPDFView else { return }
+            render(pageIndex: pageIndex, drawing: canvas.drawing, overlay: overlay, pdfView: pdfView, then: .idle)
+            return
         }
+
+        // Otherwise the change (if any) is still coming. `drawingDidChange`
+        // will render it; if it never comes, fall back to idle unchanged.
+        let fallback = DispatchWorkItem { [weak self] in
+            guard let self, let overlay = self.liveOverlays[pageIndex],
+                  !self.pagesWithPenDown.contains(pageIndex)
+            else { return }
+            self.idleFallbacks.removeValue(forKey: pageIndex)
+            if overlay.mode == .drawing { overlay.setMode(.idle) }
+        }
+        idleFallbacks[pageIndex]?.cancel()
+        idleFallbacks[pageIndex] = fallback
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.idleFallbackDelay, execute: fallback)
     }
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
         guard let canvas = canvasView as? PageCanvasView else { return }
-        store.update(canvas.drawing, forPage: canvas.pageIndex)
+        let pageIndex = canvas.pageIndex
+        store.update(canvas.drawing, forPage: pageIndex)
 
-        // Any change while the pen is up — the just-finished stroke landing
-        // late, undo/redo, lasso move, object-eraser tap — must reach the
-        // image layer. While the pen is down the live canvas is showing, so
-        // rendering would be wasted; pen-up handles it.
-        guard !pagesWithPenDown.contains(canvas.pageIndex),
-              let overlay = liveOverlays[canvas.pageIndex],
-              let pdfView = currentPDFView
-        else { return }
-        render(pageIndex: canvas.pageIndex, drawing: canvas.drawing, overlay: overlay, pdfView: pdfView, then: .idle)
+        if pagesWithPenDown.contains(pageIndex) {
+            // Live canvas is showing; remember to render at pen-up.
+            pagesChangedWhilePenDown.insert(pageIndex)
+            return
+        }
+
+        // Pen is up: the just-finished stroke or erase landing, or an
+        // undo/redo/lasso/object-eraser change from idle — render it.
+        idleFallbacks.removeValue(forKey: pageIndex)?.cancel()
+        guard let overlay = liveOverlays[pageIndex], let pdfView = currentPDFView else { return }
+        render(pageIndex: pageIndex, drawing: canvas.drawing, overlay: overlay, pdfView: pdfView, then: .idle)
     }
 
     // MARK: - Rendering (S2 Option B, design note "Rendering the image")
