@@ -3,7 +3,7 @@
 # (no raster rotation ⇒ no soft/"shadow" edges).
 import math
 from PIL import Image, ImageDraw
-S = 4
+S = 8
 N = 1024 * S
 RED = (206, 3, 20); WHITE = (255, 255, 255); BLACK = (0, 0, 0)
 
@@ -46,6 +46,15 @@ def silhouette(i):
     pts += [(x1 - i, cone_top), B, C, A]
     return [R(p) for p in pts]
 
+# centre the pencil's bounding box in the tile (the eraser end is the heavy
+# part, so centring on the rotation centre leaves it sitting high)
+_pts = silhouette(0)
+_bx = (min(q[0] for q in _pts) + max(q[0] for q in _pts)) / 2
+_by = (min(q[1] for q in _pts) + max(q[1] for q in _pts)) / 2
+_dx, _dy = N / 2 - _bx, N / 2 - _by
+_R = R
+def R(p):
+    q = _R(p); return (q[0] + _dx, q[1] + _dy)
 d.polygon(silhouette(0), fill=BLACK)
 d.polygon(silhouette(lw), fill=WHITE)
 
@@ -70,7 +79,7 @@ for k in range(3):
     if k == 2: xb -= lw / 2
     line(arc_pts((xa + xb) / 2, cone_top, (xb - xa) / 2, bump, 0, 180))
 
-out = img.resize((1024, 1024), Image.LANCZOS)
+out = img.resize((1024, 1024), Image.BOX)   # area average: no ringing halo at hard edges
 out.save("build/icon/AppIcon-1024.png")
 mask = Image.new("L", (1024, 1024), 0)
 ImageDraw.Draw(mask).rounded_rectangle([0, 0, 1023, 1023], radius=230, fill=255)
