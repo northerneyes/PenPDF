@@ -71,20 +71,32 @@ final class PageOverlayView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    /// Hides the idle canvas WITHOUT using `alpha`/`isHidden`. Those two make
+    /// UIKit's hit-testing skip the view — and PencilKit's stroke recognizer
+    /// lives on an internal subview of the canvas, which only receives a
+    /// touch if hit-testing descends into it normally. A `layer.mask` with
+    /// zero size renders nothing but is ignored by hit-testing, so the
+    /// invisible canvas keeps receiving Pencil input exactly as on `main`.
+    private let hiddenMask: CALayer = {
+        let layer = CALayer()
+        layer.frame = .zero
+        return layer
+    }()
+
     /// Idle: strokes are shown via the crisp image layer; the canvas is
-    /// invisible but still live — still holds the full drawing and still
-    /// receives Pencil input (see `hitTest`). Drawing: the reverse, so the
-    /// in-progress stroke (and the rest of the page's ink, rendered live by
-    /// PencilKit) is visible — soft at high zoom only while the pen is down
-    /// (design note "Design (per page overlay)").
+    /// masked out but still live — still holds the full drawing and still
+    /// receives Pencil input. Drawing: the reverse, so the in-progress stroke
+    /// (and the rest of the page's ink, rendered live by PencilKit) is
+    /// visible — soft at high zoom only while the pen is down (design note
+    /// "Design (per page overlay)").
     func setMode(_ newMode: Mode) {
         mode = newMode
         switch newMode {
         case .idle:
-            canvas.alpha = 0
+            canvas.layer.mask = hiddenMask
             inkImageView.isHidden = (inkImageView.image == nil)
         case .drawing:
-            canvas.alpha = 1
+            canvas.layer.mask = nil
             inkImageView.isHidden = true
         }
     }
@@ -106,13 +118,14 @@ final class PageOverlayView: UIView {
         inkImageView.frame = rendered.rect
     }
 
-    /// Bypasses UIKit's `alpha < 0.01` hit-test rejection for the invisible
-    /// idle canvas — `canvas.alpha == 0` in idle mode but it must still
-    /// receive Pencil touches. Returns `nil` when ink is off
-    /// (`canvas.isUserInteractionEnabled == false`, FR-18a debug toggle) so
-    /// touches fall through to PDFView underneath, unchanged from `main`.
+    /// Ink off (`canvas.isUserInteractionEnabled == false`, FR-18a debug
+    /// toggle): return nil so touches fall through to PDFView underneath,
+    /// unchanged from `main`. Otherwise normal hit-testing, which descends
+    /// into the canvas's internal subviews — where PencilKit's stroke
+    /// recognizer is (see `hiddenMask` for why the canvas must not be hidden
+    /// via alpha).
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        guard bounds.contains(point), canvas.isUserInteractionEnabled, !isHidden else { return nil }
-        return canvas
+        guard canvas.isUserInteractionEnabled else { return nil }
+        return super.hitTest(point, with: event)
     }
 }

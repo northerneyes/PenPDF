@@ -37,3 +37,6 @@ PageOverlayView (UIView, returned to PDFKit; PDFKit owns its frame — unchanged
 6. Lock and debug ink-off behave as on `main`.
 7. Memory: after 10 minutes of drawing/zooming on 5 pages, Xcode/`simctl` memory for the process stays < 400 MB.
 Failure on 2–3 → note findings here, do not iterate on `main`-affecting code; the branch just stays a branch.
+
+## Findings log
+- 2026-09-16 · Owner: zoom crispness "looks perfect", but **drawing was dead**. Cause: idle canvas hidden with `alpha = 0` + container `hitTest` returning the canvas itself. PencilKit's stroke recognizer sits on an internal *subview* of `PKCanvasView`; UIKit delivers a touch to the hit-test result and its ancestors' recognisers, never a descendant's — so the canvas got the touch and nobody drew. Fix: hide the idle canvas with a zero-size `layer.mask` (invisible, but hit-testing ignores masks) and let `hitTest` descend normally; only the ink-off case returns nil. Design section above amended by this note.
