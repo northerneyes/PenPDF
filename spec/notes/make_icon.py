@@ -10,8 +10,8 @@ L = Image.new("RGBA", (N, N), (0, 0, 0, 0))
 d = ImageDraw.Draw(L)
 cx = N // 2
 w = int(250 * S)            # pencil width
-top = int(70 * S)          # eraser top
-bottom = int(905 * S)       # tip point
+top = int(95 * S)          # eraser top
+bottom = int(930 * S)       # tip point
 tip_h = int(185 * S)        # cone height
 lead_h = int(70 * S)
 band_h = int(40 * S)
@@ -33,25 +33,6 @@ d.polygon([(cx - lx, lead_top), (cx + lx, lead_top), (cx, bottom)], fill=BLACK)
 L = L.rotate(-45, resample=Image.BICUBIC, center=(cx, N // 2))
 # shift slightly so the pencil sits centered visually (tip toward bottom-right)
 bg.alpha_composite(L, (int(0 * S), int(0 * S)))
-
-# Underline stroke: a black horizontal line from under the tip to the pencil's
-# right extent, as if just drawn. Endpoints found from the rendered pixels.
-px = bg.load()
-tip = None; right_x = 0
-for y in range(N - 1, 0, -2):
-    for x in range(0, N, 2):
-        if px[x, y][:3] == BLACK[:3]:
-            tip = (x, y); break
-    if tip: break
-for x in range(N - 1, 0, -2):
-    if any(px[x, y][:3] == WHITE[:3] for y in range(0, N, 8)):
-        right_x = x; break
-lw = int(44 * S); gap = int(60 * S)
-y0 = tip[1] + gap
-d2 = ImageDraw.Draw(bg)
-d2.line([(tip[0], y0), (right_x, y0)], fill=BLACK, width=lw)
-for x in (tip[0], right_x):
-    d2.ellipse([x - lw // 2, y0 - lw // 2, x + lw // 2, y0 + lw // 2], fill=BLACK)
 out = bg.resize((1024, 1024), Image.LANCZOS).convert("RGB")
 out.save("build/icon/AppIcon-1024.png")
 # rounded preview to judge like on the home screen
