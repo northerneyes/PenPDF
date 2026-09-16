@@ -147,20 +147,11 @@ final class ReaderViewController: UIViewController {
             pdfView.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
 
-        // S5 (`spec/notes/S5-screen-canvas.md`): the ink canvas is a SIBLING
-        // above `pdfView`, never a descendant of it — a `PKCanvasView` inside
-        // PDFKit's transformed view tree is bitmap-magnified by PDFKit's
-        // ancestor transform at any zoom, with no supported workaround
-        // (Apple DTS, see `deferred.md`). Same frame as `pdfView` (full-bleed,
-        // FR-31), added after it so it draws on top.
-        ink.canvas.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(ink.canvas)
-        NSLayoutConstraint.activate([
-            ink.canvas.topAnchor.constraint(equalTo: view.topAnchor),
-            ink.canvas.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
-            ink.canvas.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
-            ink.canvas.bottomAnchor.constraint(equalTo: view.bottomAnchor)
-        ])
+        // S5 (`spec/notes/S5-screen-canvas.md`): the ink canvas is attached
+        // by `ScreenInkController` INSIDE PDFKit's scroll view (sibling of the
+        // zoomed document view — never scaled, and every finger gesture still
+        // reaches the scroll view's own pan/pinch as ancestors). Nothing to
+        // add here; `ink.setNeedsSync()` below attaches on first layout.
 
         // §5.5, exact.
         pdfView.displayMode = .singlePageContinuous
@@ -170,11 +161,9 @@ final class ReaderViewController: UIViewController {
         pdfView.pageShadowsEnabled = false
         pdfView.interpolationQuality = .high
         pdfView.backgroundColor = .secondarySystemBackground
-        // S5: no `PDFPageOverlayViewProvider` and no markup-mode routing
-        // anymore — ink lives in `ink.canvas`, a sibling above `pdfView`, and
-        // gets Pencil input directly via `ScreenCanvasView.hitTest`, so
-        // PDFKit's own markup/selection handling is left at its default
-        // (off), same as a plain read-only PDFView.
+        // S5: no `PDFPageOverlayViewProvider` and no markup-mode routing —
+        // ink lives in `ink.canvas` inside PDFKit's scroll view and gets
+        // Pencil input directly; PDFKit's own markup handling stays off.
         pdfView.isInMarkupMode = false
         pdfView.document = pdfDocument
         // S5: build the initial screen-space projection of the document's

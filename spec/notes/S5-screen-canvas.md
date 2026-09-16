@@ -37,3 +37,7 @@ Store/sidecar format, identity, position persistence, lock walk, toolbar, palett
 6. Rotated-page PDF: ink aligned.
 7. Palm: single-finger never pans (FR-32); Lock still total.
 8. Kill/relaunch: all ink present at the right place.
+
+## Findings log
+- 2026-09-16 · Device, first build: "fast and crisp" (the goal), but 5 bugs. (1) strokes far too thin — tool width was screen points; (2)+(5) occasional flicker / fast stroke vanishes — commit re-assigned `canvas.drawing` while the next stroke was already in progress; (3) navigation dead — `event.allTouches` is nil during hit-testing so the pencil/finger guess swallowed fingers; (4) eraser unreliable — the 250 ms fallback committed and re-synced before the eraser's async change landed.
+- Fixes (orchestrator): tool widths × `scaleFactor` via a `PKToolPickerObserver` (canvas no longer a picker observer); canvas attached INSIDE PDFKit's scroll view as a sibling of the document view with `contentOffset` mirrored synchronously via KVO (navigation is PDFKit-native again; content coords == document coords so scrolling needs no re-projection); nothing touches `canvas.drawing` while the pen is down and commits no longer re-assign it (deferred sync applied after the gesture); fallback only resumes syncing, never commits. Text selection/link taps on the page are consumed by the canvas (accepted, P1).
