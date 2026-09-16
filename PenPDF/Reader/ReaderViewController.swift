@@ -35,6 +35,11 @@ final class ReaderViewController: UIViewController {
     private var resignActiveObserver: NSObjectProtocol?
     private var backgroundObserver: NSObjectProtocol?
     private var scaleChangeObserver: NSObjectProtocol?
+    /// S2 (`spec/notes/S2-option-b-crisp-ink.md` "Re-render triggers"): the
+    /// 150 ms zoom-settle debounce before re-rendering ink bitmaps. Only a
+    /// bitmap is re-rendered on this timer, never geometry, so — unlike
+    /// spike S1's counter-transform — it cannot drift.
+    private var zoomSettleWork: DispatchWorkItem?
 
     // MARK: - Resize window (FR-10 / F1)
 
@@ -115,6 +120,7 @@ final class ReaderViewController: UIViewController {
             NotificationCenter.default.removeObserver(scaleChangeObserver)
         }
         resizeWindowEnd?.cancel()
+        zoomSettleWork?.cancel()
         if securityScoped {
             fileURL.stopAccessingSecurityScopedResource()
         }
@@ -158,9 +164,9 @@ final class ReaderViewController: UIViewController {
         // markup/selection handling.
         pdfView.isInMarkupMode = true
         pdfView.document = pdfDocument
-        // Spike S1 (deferred.md "Crisp ink at zoom"): prime the canvases'
-        // PencilKit-native zoom once up front, not just on later zoom.
-        ink.updateCrispZoom(for: pdfView)
+        // S2 (`spec/notes/S2-option-b-crisp-ink.md`): prime ink render scale
+        // for the initial layout; a no-op when there's nothing to render yet.
+        ink.rerenderForZoom(in: pdfView)
 
         configureScrollViews(in: pdfView)
 
@@ -212,10 +218,18 @@ final class ReaderViewController: UIViewController {
             queue: .main
         ) { [weak self] _ in
             guard let self else { return }
-            // Spike S1 (deferred.md): refresh crisp-zoom on every zoom change,
-            // independent of whether a resize is settling — unconditionally,
-            // like the experiment it replaces.
-            self.ink.updateCrispZoom(for: self.pdfView)
+            // S2 (`spec/notes/S2-option-b-crisp-ink.md` "Re-render triggers"):
+            // wait for 150 ms of quiet before re-rendering ink bitmaps — a
+            // pinch fires this repeatedly, and re-rendering on every tick
+            // would be wasted work (and fight the in-flight generation
+            // bookkeeping in `InkOverlayCoordinator.render`).
+            self.zoomSettleWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.ink.rerenderForZoom(in: self.pdfView)
+            }
+            self.zoomSettleWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
             guard self.resizePin != nil else { return }
             DispatchQueue.main.async { [weak self] in
                 self?.applyResizePin()
@@ -249,9 +263,9 @@ final class ReaderViewController: UIViewController {
         // PDFKit may recreate its internal scroll view on layout; re-assert
         // this every time rather than once (§5.5 footnote, FR-10 / P3).
         configureScrollViews(in: pdfView)
-        // Spike S1: cheap and idempotent — catches any layout-driven zoom
-        // change `.PDFViewScaleChanged` might not fire for.
-        ink.updateCrispZoom(for: pdfView)
+        // S2: cheap and idempotent — catches any layout-driven zoom change
+        // `.PDFViewScaleChanged` might not fire for.
+        ink.rerenderForZoom(in: pdfView)
 
         // FR-31 / §7: register PDFKit's own scroll view with the navigation
         // controller so it applies the scroll-edge glass effect (the bar
