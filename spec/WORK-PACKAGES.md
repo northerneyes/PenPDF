@@ -167,3 +167,14 @@ WP0–WP7 done and owner-accepted on the simulator. Open: device-only tests (`TE
 ## S2 — Option B crisp ink — ACCEPTED on simulator & MERGED to main 2026-09-16 (device regression check pending)
 Owner: "crispness, position, writing feel perfect — same quality as Preview." Two fixes during acceptance (hit-test/mask; pen-up render ordering) logged in the note.
 Design and acceptance in `spec/notes/S2-option-b-crisp-ink.md`. Owns: `PenPDF/Reader/PageOverlayView.swift` (new), `InkOverlayCoordinator.swift` (return the overlay container; render pipeline; tool begin/end + drawing-change hooks), Reader `.PDFViewScaleChanged` hook. Merges to `main` only after owner acceptance on simulator AND iPad.
+
+## Milestone — simulator phase closed 2026-09-16
+Owner on `main` @ `cddb6ab`+: "works beautifully — core functionality nailed." All P0 packages plus S2 crisp ink accepted on the simulator. Next: device regression (`TEST-CHECKLIST.md` C10, D, E, F) when Apple frees device slots; then features from the P1 list below, in the order the owner picks.
+
+### Feature backlog (P1, owner to prioritise after device run)
+- FR-29 Export with ink (flattened copy via share sheet) — only if the owner needs notes visible outside PenPDF.
+- FR-6 Password-protected PDFs (prompt once).
+- FR-14 Point-in-page restore at fit width (currently page-level at fit, point-level when zoomed in).
+- Lock default-on / Pencil double-tap (system-setting-respecting) to toggle Lock — decide after palm test D2/E1.
+- ✎ semantics: keep palette-only, or Preview-style ink on/off in all builds — decide on device.
+- Search / outline are non-goals unless the owner reopens them.
