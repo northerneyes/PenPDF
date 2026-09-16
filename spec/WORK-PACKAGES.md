@@ -15,11 +15,12 @@ Rules:
    no Core Data, no async/await required, no singletons beyond those in the module map.
 4. Never change: drawingPolicy (.pencilOnly), the overlay-provider approach, sidecar storage,
    content-hash identity, scrollsToTop=false, the "restore before observing page changes" order.
-5. After changes, the project must build:
+5. Token discipline: verify Apple API signatures with the **context7** tool before use; navigate symbols with the **swift-lsp** tools (definition/references/hover) instead of dumping files with cat/sed/grep; don't boot simulators or screenshot unless the package explicitly asks — the owner tests on the iPad.
+6. After changes, the project must build:
    xcodebuild -project PenPDF.xcodeproj -scheme PenPDF \
      -destination 'generic/platform=iOS Simulator' build 2>&1 | tail -20
    Report the result verbatim. If you cannot build (no Xcode), say so explicitly — do not claim success.
-6. Finish with: files changed, what you verified, what you could NOT verify (device-only items),
+7. Finish with: files changed, what you verified, what you could NOT verify (device-only items),
    and any place where you had to interpret the spec.
 ```
 
@@ -178,3 +179,8 @@ Owner on `main` @ `cddb6ab`+: "works beautifully — core functionality nailed."
 - Lock default-on / Pencil double-tap (system-setting-respecting) to toggle Lock — decide after palm test D2/E1.
 - ✎ semantics: keep palette-only, or Preview-style ink on/off in all builds — decide on device.
 - Search / outline are non-goals unless the owner reopens them.
+
+## Status 2026-09-16 (evening)
+- `main` = tag `stable-drawing-v1` (S5 screen-scale canvas). Owner: writing fast & crisp, eraser/undo natural. This is the baseline that must never regress — run `spec/SMOKE.md` before every merge.
+- Deferred: FR-32 palm/two-finger navigation (reverted; Lock is the palm answer until writing is fully settled); text selection / link taps (canvas takes them); S5 stroke-width parity with Preview (owner: "one level thinner but acceptable").
+

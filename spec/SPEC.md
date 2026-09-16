@@ -50,6 +50,7 @@ Priority: **P0** = MVP must-have; **P1** = do after P0 is verified on device; **
 - FR-9 Title area (a custom `titleView`) shows, like Preview: a small first-page thumbnail (or `doc.text` symbol if rendering fails) + the file name (without extension) on the top line, and `currentPage / pageCount` on a second, smaller line — live-updating as you scroll. Nothing in the title is tappable.
 - FR-10 **Position invariants** — the current page must NOT change as a result of any of: status-bar tap, nav-bar tap, device rotation, Split View / Stage Manager resize, app backgrounding & foregrounding, tool palette showing/hiding, Lock toggling. Rotation/resize re-fit the zoom but keep the same page (and as close as possible the same point on it).
 - FR-31 (P1) Full-bleed under a glass navigation bar — see §7.
+- FR-32 (P1, deferred 2026-09-16) Palm-safe navigation: a resting palm pans the page like in Preview. Two-finger-only pan was tried on device and reverted at the owner's request until writing is fully settled; Lock (§3.5) is the interim answer. Candidates: two-finger pan, or pen-down auto-lock (disable pan/pinch from `didBeginUsingTool` to ~300 ms after `didEndUsingTool`).
 - FR-11 Text selection: whatever PDFKit gives for free with finger long-press. Do not build anything for it. Disabled while Locked (§3.5).
 
 ### 3.3 Remembering position (P0)
@@ -85,7 +86,7 @@ Priority: **P0** = MVP must-have; **P1** = do after P0 is verified on device; **
 - FR-27 (P0) Ink that already exists **inside** a PDF (Preview, Files Markup, other apps store strokes as `Ink` annotations) must render exactly as PDFKit renders it by default. Never set `displaysAnnotations = false` on pages or hide annotations. PenPDF's own ink layer draws above it.
 - FR-28 (v1 limitation, by design) Pre-existing in-file ink is not editable/erasable in PenPDF; PenPDF's ink is not visible to Preview because it is a sidecar (§5.1). Both are accepted trade-offs for speed and never touching the source file.
 - FR-29 (P2) "Export with ink": share-sheet action producing a **copy** of the PDF with PenPDF strokes flattened in as `Ink` annotations, so Preview and others see them. The original stays untouched.
-- FR-30 (P2, uncertain) Import in-file ink into the editable layer by converting annotation paths to `PKStroke`s (public API, loses pressure). Do not rely on Apple's private annotation payloads.
+- FR-30 (P1) **Adopt Preview ink.** Device finding 2026-09-16: Preview's baked-in strokes render as a low-res bitmap at every zoom (appearance stream rasterised at write time). Import them into the editable sidecar: first try decoding the PencilKit payload Apple stores alongside the `Ink` annotation (private format — inspect a real file, version-guard, fall back), else convert annotation ink paths to `PKStroke`s (public, loses pressure). Suppress the adopted annotations' rendering afterwards. File never modified.
 - All frameworks are public Apple SDKs only: UIKit, PDFKit, PencilKit, UniformTypeIdentifiers, CryptoKit. No private API. No third-party code.
 
 ## 4. Non-goals (do not build, do not "prepare for")
