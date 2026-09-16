@@ -8,8 +8,8 @@ Authoritative docs, in order: `spec/SPEC.md` → `spec/WORK-PACKAGES.md` → `sp
 ## Where things are (2026-09-16)
 
 - `main` = tag **`stable-drawing-v1`**. Owner: "crisp and beautiful, feels natural — 95 % of what bothered me is solved." **Do not regress the writing path.**
-- Deploy to the iPad (one command; iPad awake on Wi-Fi):
-  `xcodebuild -project PenPDF.xcodeproj -scheme PenPDF -destination 'id=8E516571-39A1-5391-B303-92B22DDC5FC3' -allowProvisioningUpdates -derivedDataPath build build && xcrun devicectl device install app --device 8E516571-39A1-5391-B303-92B22DDC5FC3 build/Build/Products/Debug-iphoneos/PenPDF.app && xcrun devicectl device process launch --device 8E516571-39A1-5391-B303-92B22DDC5FC3 com.georgebuhanov.penpdf`
+- Deploy to the iPad (one command; iPad awake on Wi-Fi). **Release for daily use** (optimised, no debug button); swap `Release` for `Debug` (and the path) only when the debug ink-off button or debug logs are needed:
+  `xcodebuild -project PenPDF.xcodeproj -scheme PenPDF -configuration Release -destination 'id=8E516571-39A1-5391-B303-92B22DDC5FC3' -allowProvisioningUpdates -derivedDataPath build build && xcrun devicectl device install app --device 8E516571-39A1-5391-B303-92B22DDC5FC3 build/Build/Products/Release-iphoneos/PenPDF.app && xcrun devicectl device process launch --device 8E516571-39A1-5391-B303-92B22DDC5FC3 com.georgebuhanov.penpdf`
   Then check it's alive: `xcrun devicectl device info processes --device 8E516571-… | grep -c PenPDF.app` (a crash on launch shows as 0).
 - Simulator `F30083E9-7275-4D26-A8F9-7590500EA40F` exists but has no Pencil: use it only as a compile/launch check. **All real verification is on the iPad by the owner.**
 - Bundle id `com.georgebuhanov.penpdf`, team `9F7BA86SV7`. Never edit `project.pbxproj` (synchronized folder — new files compile automatically).
