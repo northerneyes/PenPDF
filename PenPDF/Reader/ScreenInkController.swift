@@ -66,6 +66,12 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
 
     private weak var hostScrollView: UIScrollView?
     private var contentOffsetObservation: NSKeyValueObservation?
+    /// During a live pinch PDFKit scales its document view with the scroll
+    /// view's zoom transform while `scaleFactor` and `contentOffset` update
+    /// on their own schedules — re-projecting per frame from those makes the
+    /// ink jump around (device finding). The canvas is simply hidden for the
+    /// duration of the pinch and re-shown after the first sync that follows.
+    private var isPinching = false
     private var syncScheduled = false
     private var scaleChangeObserver: NSObjectProtocol?
     private var pageChangeObserver: NSObjectProtocol?
@@ -122,6 +128,7 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
             hostScrollView = scrollView
             canvas.removeFromSuperview()
             scrollView.addSubview(canvas)                 // last ⇒ above the document view
+            scrollView.pinchGestureRecognizer?.addTarget(self, action: #selector(hostPinchChanged(_:)))
             contentOffsetObservation?.invalidate()
             contentOffsetObservation = scrollView.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in
                 // Synchronous with the scroll: the frame/offset update lands
@@ -131,6 +138,19 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
             }
         }
         followScrollView()
+    }
+
+    @objc private func hostPinchChanged(_ recognizer: UIPinchGestureRecognizer) {
+        switch recognizer.state {
+        case .began:
+            isPinching = true
+            canvas.isHidden = true
+        case .ended, .cancelled, .failed:
+            isPinching = false
+            setNeedsSync()                                 // re-project, then unhide (in syncDisplay)
+        default:
+            break
+        }
     }
 
     private func followScrollView() {
@@ -214,6 +234,7 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
         canvas.drawing = PKDrawing(strokes: strokes)
         isSyncingProgrammatically = false
         displayedStrokeCount = strokes.count
+        if !isPinching, canvas.isHidden { canvas.isHidden = false }
     }
 
     /// Coalesces any number of triggers within one run-loop turn.

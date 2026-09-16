@@ -388,10 +388,8 @@ final class ReaderViewController: UIViewController {
     /// genuinely PDFKit's own — no `PKCanvasView` exclusion needed (unlike
     /// pre-S5, where per-page canvases lived inside this very tree).
     ///
-    /// FR-32: also requires **two fingers** to pan (`panGestureRecognizer
-    /// .minimumNumberOfTouches = 2`) — a resting palm is one large
-    /// single-touch and, pre-S5, drifted the page exactly like in Preview;
-    /// pinch-to-zoom is already two-finger. Lock mode (§3.5) remains the
+    /// FR-32 (two-finger pan) is currently reverted — see the comment in the
+    /// body. Lock mode (§3.5) remains the
     /// total-immunity option.
     ///
     /// Called after `document` is set and again on every layout pass, since
@@ -400,7 +398,10 @@ final class ReaderViewController: UIViewController {
         if let scrollView = view as? UIScrollView {
             scrollView.scrollsToTop = false
             scrollView.contentInsetAdjustmentBehavior = .always
-            scrollView.panGestureRecognizer.minimumNumberOfTouches = 2
+            // FR-32 (two-finger pan) reverted 2026-09-16 at the owner's
+            // request: single-finger pan restored; palm handling is deferred
+            // until writing is nailed. Lock mode remains the palm answer.
+            scrollView.panGestureRecognizer.minimumNumberOfTouches = 1
         }
         for subview in view.subviews {
             configureScrollViews(in: subview)
