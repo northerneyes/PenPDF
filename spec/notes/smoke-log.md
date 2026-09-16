@@ -1,0 +1,1 @@
+- 2026-09-16 · 1eb8dd9 (tag stable-drawing-v1) · owner: writing/eraser/undo pass; pinch fix + single-finger pan pending test
