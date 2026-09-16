@@ -163,3 +163,6 @@ PencilKit-native `zoomScale` + `1/z` counter-transform rendered sharp but drifte
 
 ## Status summary (2026-09-15, end of simulator phase)
 WP0–WP7 done and owner-accepted on the simulator. Open: device-only tests (`TEST-CHECKLIST.md` sections C10, D, E, F) once Apple frees device slots; P1s in `deferred.md`; ✎ semantics decision after device use.
+
+## S2 — Option B crisp ink (branch `exp/option-b-crisp-ink`) — IN PROGRESS 2026-09-16
+Design and acceptance in `spec/notes/S2-option-b-crisp-ink.md`. Owns: `PenPDF/Reader/PageOverlayView.swift` (new), `InkOverlayCoordinator.swift` (return the overlay container; render pipeline; tool begin/end + drawing-change hooks), Reader `.PDFViewScaleChanged` hook. Merges to `main` only after owner acceptance on simulator AND iPad.
