@@ -68,3 +68,10 @@ Day 1: spec written first, then WP0–WP7 implemented by Sonnet agents under Fab
 1. Read `CLAUDE.md`, then `spec/SPEC.md` §5 and `spec/notes/S5-screen-canvas.md`.
 2. Deploy `main` to the iPad and run `spec/SMOKE.md` before changing anything.
 3. Open items are in `spec/WORK-PACKAGES.md` "Status" and `deferred.md`; the owner picks the order.
+
+## 2026-09-16 evening · Identity incident — "all my notes are gone"
+- Symptom: opening `tagmysteriet_reprinted.pdf` showed no notes and page 1; later opens showed them again. Container on the iPad had FOUR folders for that one file (different content-hash keys at 15:22, 16:19, 18:14, 18:16), each holding part of the day's notes.
+- Cause: the hash read the file's bytes while a file provider was still materialising it → short reads → different size/head/tail → new key. The day-1 "fall back to a filename hash" was never hit; the danger was the *partial* read, which the code didn't detect.
+- Fix (`918f137`): hash inside `NSFileCoordinator` (providers finish first), verify every chunk is complete, **no fallback key — refuse to open** with a clear message instead; plus `DocumentStore` adopts an existing folder with the same file name + page count when a new key has none (`aliases.json`).
+- Recovery: PencilKit on macOS crashes when modifying drawings (`PKReplicaManager` prefs), so the merge ran ON the iPad via a debug-only launch argument `--merge-duplicate-stores` (`StoreMaintenance.swift`): union per page into the newest folder, originals renamed `.merged-<stamp>`, report in `Documents/merge-report.txt`. Run with `xcrun devicectl device process launch --device <id> com.georgebuhanov.penpdf --merge-duplicate-stores` on a Debug build.
+- Lesson: any "fallback" that silently creates a new identity is a data-loss bug. Fail loudly instead. And ship a maintenance tool with the fix.
