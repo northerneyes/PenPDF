@@ -103,7 +103,7 @@ If an implementer thinks something here is needed to satisfy a P0, they stop and
 | Language mode | **Swift 5** (`SWIFT_VERSION = 5.0`), iOS 17 deployment target | Avoids Swift 6 strict-concurrency friction in delegate/notification code. Everything is main-thread anyway. |
 | PDF rendering | **PDFKit** (`PDFView`) | Same engine as Preview. Gives scrolling, zoom, selection, tiling, caching for free. PDFium/MuPDF only if PDFKit proves too slow on the owner's real documents — not before. |
 | Ink | **PencilKit** (`PKCanvasView`, `PKDrawing`, `PKToolPicker`) | Only way to get Apple's private low-latency pencil pipeline. |
-| Ink ↔ PDF composition | **`PDFPageOverlayViewProvider`** (iOS 16+) — one `PKCanvasView` per visible page | Apple's sanctioned way to put PencilKit over PDFKit. Not `PDFAnnotation` ink (slow, lossy, breaks pencil pipeline). |
+| Ink ↔ PDF composition | **`PDFPageOverlayViewProvider`** (iOS 16+) — one `PageOverlayView` per visible page = live `PKCanvasView` (full drawing, masked out when idle) + `UIImageView` of the settled strokes rendered by `PKDrawing.image(from:scale:)` at the current zoom | Apple's sanctioned way to put PencilKit over PDFKit. The image layer exists because a `PKCanvasView` magnified by PDFKit's ancestor transform is bitmap-blurry and Apple DTS confirms no workaround; a bitmap layer honours `contentsScale`, so settled ink is crisp at any zoom while the live stroke keeps PencilKit's latency untouched. Design/acceptance: `spec/notes/S2-option-b-crisp-ink.md`. Not `PDFAnnotation` ink (writes the file, loses pen fidelity). |
 | Ink storage | Sidecar `PKDrawing` blobs per page in Application Support | Lossless, vector, fast. Never touches the source PDF. |
 | Document identity | SHA-256 of (file size ∥ first 64 KB ∥ last 64 KB) | Path-independent (FR-15). ~1 ms. |
 | Position storage | `meta.json` per document folder | Lives next to the ink; deleting a folder cleans everything for that document. |
@@ -124,6 +124,7 @@ PenPDF/                          (Xcode target, synchronized folder)
 │  ├─ ReaderToolbar.swift          builds UIBarButtonItems; no logic (optional file)
 │  ├─ InkOverlayCoordinator.swift  PDFPageOverlayViewProvider + PKCanvasViewDelegate; owns live canvases + PKToolPicker
 │  ├─ PageCanvasView.swift         PKCanvasView subclass (pageIndex, canBecomeFirstResponder=false)
+│  ├─ PageOverlayView.swift        container returned to PDFKit: masked live canvas + crisp settled-ink image (S2)
 │  ├─ ResponderView.swift          UIView with canBecomeFirstResponder=true (tool picker anchor)
 │  └─ InteractionLock.swift        enables/disables finger gesture recognizers on PDFView tree
 ├─ Storage/
@@ -174,8 +175,8 @@ InkOverlayCoordinator
 
 **Overlay for page** (called by PDFKit as pages come on screen)
 1. `index = document.index(for: page)`; guard `!= NSNotFound`.
-2. Reuse `liveCanvases[index]` or create `PageCanvasView` (§5.6), set `drawing = store.drawing(forPage: index)`, `toolPicker.addObserver(canvas)`.
-3. Return it. **Do not set its frame** — PDFKit owns geometry. The single exception is the crisp-zoom counter-transform (`spec/notes/deferred.md`, spike S1): `zoomScale = z` plus `transform = scale(1/z)`, which leaves the on-screen frame untouched while PencilKit renders at true resolution.
+2. Reuse the live `PageOverlayView` or create one wrapping a new `PageCanvasView` (§5.6) with `drawing = store.drawing(forPage: index)`, `toolPicker.addObserver(canvas)`; kick off the settled-ink image render.
+3. Return the overlay container. **Do not set its frame** — PDFKit owns geometry. The single exception is the crisp-zoom counter-transform (`spec/notes/deferred.md`, spike S1): `zoomScale = z` plus `transform = scale(1/z)`, which leaves the on-screen frame untouched while PencilKit renders at true resolution.
 
 **Overlay ends display** → `store.update(canvas.drawing, forPage: index)`; `toolPicker.removeObserver(canvas)`; remove from `liveCanvases`.
 
