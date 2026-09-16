@@ -18,7 +18,7 @@ These are the owner's actual complaints. Every one is a hard requirement, not a 
 
 | # | Pain in Preview / Notability | What we do instead |
 |---|---|---|
-| P1 | Palm rejection barely works — hand resting on screen draws, pans, zooms. | Ink is **pencil-only** at the API level (finger can never draw). Plus an explicit **Lock** mode that makes the document inert to fingers entirely, like paper. |
+| P1 | Palm rejection barely works — a resting hand **pans and zooms** the page (the owner had already disabled finger drawing system-wide; stray marks were never the main issue). | Ink is **pencil-only** at the API level (finger can never draw). Plus an explicit **Lock** mode that makes the document inert to fingers entirely, like paper. |
 | P2 | Does not remember the last opened page. | Position is saved per document, keyed by **file content**, not path. Restored on every open, including after rename/move/iCloud eviction. |
 | P3 | Tapping the top bar / status bar scrolls to page 1. Losing the page is the worst thing the app can do. | `scrollsToTop` disabled on **every** scroll view in the hierarchy. No gesture, rotation, or layout event may change the current page. |
 | P4 | Notability uses its own ink engine, feels off. | We use **PencilKit** unmodified. Zero custom stroke code. |

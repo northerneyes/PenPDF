@@ -41,7 +41,7 @@ Tick with the WP that must pass it. Any P0 failure blocks "done".
 
 ## D. Palm & finger (WP4, device)
 - [ ] D1 System Settings → Apple Pencil → "Only Draw with Apple Pencil" **OFF**. Finger on page: pans/zooms, **never draws**. (P0)
-- [ ] D2 Rest palm on the page while writing (unlocked) → no stray ink. Small pan drift is allowed when unlocked. (P0)
+- [ ] D2 Rest palm on the page while writing (unlocked) → no stray ink (guaranteed by `pencilOnly`). Note how much the palm pans/zooms the page — this was the owner's actual Preview complaint; Lock (E1) is the answer, and if the drift is bad enough that Lock stays on permanently, make Lock default-on (one flag in `AppSettings`). (P0)
 - [ ] D3 Finger long-press selects text (unlocked). (P1)
 
 ## E. Lock mode (WP5, device)
