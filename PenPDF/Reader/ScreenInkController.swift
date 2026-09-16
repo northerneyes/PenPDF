@@ -66,12 +66,15 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
 
     private weak var hostScrollView: UIScrollView?
     private var contentOffsetObservation: NSKeyValueObservation?
-    /// During a live pinch PDFKit scales its document view with the scroll
-    /// view's zoom transform while `scaleFactor` and `contentOffset` update
-    /// on their own schedules — re-projecting per frame from those makes the
-    /// ink jump around (device finding). The canvas is simply hidden for the
-    /// duration of the pinch and re-shown after the first sync that follows.
-    private var isPinching = false
+    /// During a live pinch PDFKit scales its already-rendered document view
+    /// with the scroll view's zoom transform and re-renders when it ends. The
+    /// canvas mirrors that: while zooming it is scaled by the same factor
+    /// about the content origin (momentarily soft, exactly like the page
+    /// tiles), then re-projected crisp on the first sync after the gesture.
+    /// Pure geometry — no per-frame re-projection, so nothing can jump.
+    private var isMirroringZoom = false
+    private var zoomStartScale: CGFloat = 1
+    private var zoomStartOffset: CGPoint = .zero
     private var syncScheduled = false
     private var scaleChangeObserver: NSObjectProtocol?
     private var pageChangeObserver: NSObjectProtocol?
@@ -133,28 +136,70 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
             contentOffsetObservation = scrollView.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in
                 // Synchronous with the scroll: the frame/offset update lands
                 // in the same run-loop turn as PDFKit's, before rendering.
-                self?.followScrollView()
-                self?.setNeedsSync()                       // newly visible pages
+                guard let self else { return }
+                if self.isMirroringZoom {
+                    // Still zooming (or zoom-bouncing): keep mirroring; end
+                    // once the scroll view is neither.
+                    if scrollView.isZooming || scrollView.isZoomBouncing {
+                        self.mirrorZoom(scrollView)
+                        return
+                    }
+                    self.endMirroringZoom()
+                    return
+                }
+                self.followScrollView()
+                self.setNeedsSync()                        // newly visible pages
             }
         }
         followScrollView()
     }
 
     @objc private func hostPinchChanged(_ recognizer: UIPinchGestureRecognizer) {
+        guard let scrollView = hostScrollView else { return }
         switch recognizer.state {
         case .began:
-            isPinching = true
-            canvas.isHidden = true
-        case .ended, .cancelled, .failed:
-            isPinching = false
-            setNeedsSync()                                 // re-project, then unhide (in syncDisplay)
+            beginMirroringZoom(scrollView)
+        case .changed:
+            mirrorZoom(scrollView)
         default:
-            break
+            break   // ending is detected in the KVO handler once the zoom bounce settles
         }
     }
 
+    private func beginMirroringZoom(_ scrollView: UIScrollView) {
+        guard !isMirroringZoom, !penDown else { return }
+        isMirroringZoom = true
+        zoomStartScale = scrollView.zoomScale
+        zoomStartOffset = scrollView.contentOffset
+        // Scale about the canvas's top-left so the maths below is a plain
+        // similarity about the content origin.
+        let layer = canvas.layer
+        layer.anchorPoint = .zero
+        layer.position = zoomStartOffset
+        mirrorZoom(scrollView)
+    }
+
+    /// Canvas-local point L (drawn at start-zoom document coords L + o0)
+    /// must land where the document view now shows it: k·(L + o0) − o(t).
+    /// With anchor (0,0), transform scale(k) and position k·o0 that is exact.
+    private func mirrorZoom(_ scrollView: UIScrollView) {
+        guard isMirroringZoom, zoomStartScale > 0 else { return }
+        let k = scrollView.zoomScale / zoomStartScale
+        canvas.transform = CGAffineTransform(scaleX: k, y: k)
+        canvas.layer.position = CGPoint(x: zoomStartOffset.x * k, y: zoomStartOffset.y * k)
+    }
+
+    private func endMirroringZoom() {
+        guard isMirroringZoom else { return }
+        isMirroringZoom = false
+        canvas.transform = .identity
+        canvas.layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        followScrollView()
+        setNeedsSync()                                     // crisp re-projection at the new zoom
+    }
+
     private func followScrollView() {
-        guard let scrollView = hostScrollView else { return }
+        guard let scrollView = hostScrollView, !isMirroringZoom else { return }
         let offset = scrollView.contentOffset
         let size = scrollView.bounds.size
         let frame = CGRect(origin: offset, size: size)
@@ -220,6 +265,7 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
     func syncDisplay() {
         attachIfNeeded()
         guard !penDown else { syncPendingAfterGesture = true; return }
+        guard !isMirroringZoom else { return }             // re-projected when the zoom ends
 
         var strokes: [PKStroke] = []
         for page in visiblePages {
@@ -234,7 +280,6 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
         canvas.drawing = PKDrawing(strokes: strokes)
         isSyncingProgrammatically = false
         displayedStrokeCount = strokes.count
-        if !isPinching, canvas.isHidden { canvas.isHidden = false }
     }
 
     /// Coalesces any number of triggers within one run-loop turn.
