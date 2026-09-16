@@ -178,3 +178,7 @@ Owner on `main` @ `cddb6ab`+: "works beautifully — core functionality nailed."
 - Lock default-on / Pencil double-tap (system-setting-respecting) to toggle Lock — decide after palm test D2/E1.
 - ✎ semantics: keep palette-only, or Preview-style ink on/off in all builds — decide on device.
 - Search / outline are non-goals unless the owner reopens them.
+
+## WP8 — Two-finger navigation (FR-32) — after S3
+Owns: `ReaderViewController.configureScrollViews(in:)` only (`panGestureRecognizer.minimumNumberOfTouches = 2` for every `UIScrollView` under `pdfView`, canvases excluded). Device acceptance: D2 with palm → no drift; two-finger scroll and pinch work; single-finger long-press still selects text; Lock unchanged.
+

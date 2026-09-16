@@ -18,7 +18,7 @@ These are the owner's actual complaints. Every one is a hard requirement, not a 
 
 | # | Pain in Preview / Notability | What we do instead |
 |---|---|---|
-| P1 | Palm rejection barely works — a resting hand **pans and zooms** the page (the owner had already disabled finger drawing system-wide; stray marks were never the main issue). | Ink is **pencil-only** at the API level (finger can never draw). Plus an explicit **Lock** mode that makes the document inert to fingers entirely, like paper. |
+| P1 | Palm rejection barely works — a resting hand **pans and zooms** the page (the owner had already disabled finger drawing system-wide; stray marks were never the main issue). | Ink is **pencil-only** at the API level (finger can never draw). **Two-finger pan** (FR-32) so a palm's single touch can't move the page, like Notability. Plus an explicit **Lock** mode that makes the document inert to fingers entirely, like paper. |
 | P2 | Does not remember the last opened page. | Position is saved per document, keyed by **file content**, not path. Restored on every open, including after rename/move/iCloud eviction. |
 | P3 | Tapping the top bar / status bar scrolls to page 1. Losing the page is the worst thing the app can do. | `scrollsToTop` disabled on **every** scroll view in the hierarchy. No gesture, rotation, or layout event may change the current page. |
 | P4 | Notability uses its own ink engine, feels off. | We use **PencilKit** unmodified. Zero custom stroke code. |
@@ -50,6 +50,7 @@ Priority: **P0** = MVP must-have; **P1** = do after P0 is verified on device; **
 - FR-9 Title area (a custom `titleView`) shows, like Preview: a small first-page thumbnail (or `doc.text` symbol if rendering fails) + the file name (without extension) on the top line, and `currentPage / pageCount` on a second, smaller line — live-updating as you scroll. Nothing in the title is tappable.
 - FR-10 **Position invariants** — the current page must NOT change as a result of any of: status-bar tap, nav-bar tap, device rotation, Split View / Stage Manager resize, app backgrounding & foregrounding, tool palette showing/hiding, Lock toggling. Rotation/resize re-fit the zoom but keep the same page (and as close as possible the same point on it).
 - FR-31 (P1) Full-bleed under a glass navigation bar — see §7.
+- FR-32 (P0, added 2026-09-16 after device test D2) **Two-finger navigation.** A single finger never pans the page — a resting palm is one large single-touch and it drifted the page exactly as in Preview. Notability's model: pan requires **two fingers**; pinch stays two-finger; single-finger tap/long-press may still select text (FR-11). Implemented by setting `minimumNumberOfTouches = 2` on every `UIScrollView.panGestureRecognizer` under `pdfView` in the same recursive walk that sets `scrollsToTop = false` (re-applied on every layout, PDFKit may recreate internals). Lock mode (§3.5) is unchanged and still the total-immunity option. Backup if two-finger alone still drifts under a heavy palm: pen-down auto-lock (disable pan/pinch from `didBeginUsingTool` to ~300 ms after `didEndUsingTool`).
 - FR-11 Text selection: whatever PDFKit gives for free with finger long-press. Do not build anything for it. Disabled while Locked (§3.5).
 
 ### 3.3 Remembering position (P0)

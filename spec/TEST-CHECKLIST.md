@@ -43,6 +43,8 @@ Tick with the WP that must pass it. Any P0 failure blocks "done".
 - [ ] D1 System Settings → Apple Pencil → "Only Draw with Apple Pencil" **OFF**. Finger on page: pans/zooms, **never draws**. (P0)
 - [ ] D2 Rest palm on the page while writing (unlocked) → no stray ink (guaranteed by `pencilOnly`). Note how much the palm pans/zooms the page — this was the owner's actual Preview complaint; Lock (E1) is the answer, and if the drift is bad enough that Lock stays on permanently, make Lock default-on (one flag in `AppSettings`). (P0)
 - [ ] D3 Finger long-press selects text (unlocked). (P1)
+- [ ] D4 (FR-32) Single-finger drag does NOT pan; two-finger drag pans; pinch zooms; palm resting while writing → no drift. (P0)
+- [ ] D5 Device results 2026-09-16 (pre-FR-32 build): D2 = drifts like Preview; E1 lock = pass; B7/B8 = pass; Preview's baked-in ink renders (FR-27) but blurry at zoom — PDFKit tile resolution, not ours.
 
 ## E. Lock mode (WP5, device)
 - [ ] E1 Lock ON → icon filled/tinted. Palm rest + drag fingers in all directions + pinch → page does not move, zoom, or select. (P0)

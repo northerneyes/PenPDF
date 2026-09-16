@@ -99,6 +99,11 @@ final class ReaderViewController: UIViewController {
         self.store = store
         self.ink = InkOverlayCoordinator(document: document, store: store, toolPicker: toolPicker)
         super.init(nibName: nil, bundle: nil)
+        // S3 (`spec/notes/S3-stroke-only-canvas.md` "Undo / redo"): the
+        // coordinator registers its full-drawing undo/redo steps into this
+        // Reader's single shared manager, same one `undoManager` below
+        // exposes to the responder chain.
+        ink.undoManager = readerUndoManager
     }
 
     @available(*, unavailable)
