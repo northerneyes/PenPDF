@@ -36,3 +36,6 @@ S2 swaps the *whole page's ink* between two layers at pen-down/up: crisp bitmap 
 4. Kill mid-stroke-session → relaunch → all committed strokes present.
 5. Zoom cycles: unchanged from S2 (crisp, stable).
 6. Latency unchanged (side-by-side with Notes).
+
+## Result — FAILED on device 2026-09-16
+Owner: eraser doesn't work; a new stroke gets connected to previous writing by a line (the cleared canvas / appended strokes path misbehaves); shift mostly fixed but the stroke under the pencil is extremely blurry while writing, then snaps sharp on lift — "the writing layer is crap". Branch kept for the record; NOT merged. Owner asked to compare against the pre-S2 baseline (`2236225`, plain PKCanvasView overlay).
