@@ -55,10 +55,19 @@ final class BrowserViewController: UIDocumentBrowserViewController,
             return
         }
 
+        // Identity BEFORE anything else: if the file can't be read completely
+        // right now (still downloading from iCloud/Dropbox), refuse to open
+        // rather than open it under a fresh identity with no notes.
+        guard let identityKey = DocumentIdentity.key(for: url) else {
+            if scoped { url.stopAccessingSecurityScopedResource() }
+            presentFailure("\(url.lastPathComponent) isn't fully available yet (still downloading?). Try again in a moment.")
+            return
+        }
+
         LastDocument.remember(url)
 
         func presentReader() {
-            let reader = ReaderViewController(fileURL: url, document: document, securityScoped: scoped)
+            let reader = ReaderViewController(fileURL: url, document: document, securityScoped: scoped, identityKey: identityKey)
             let navigation = UINavigationController(rootViewController: reader)
             navigation.modalPresentationStyle = .fullScreen
             present(navigation, animated: true)

@@ -11,56 +11,69 @@ import os.log
 ///
 /// SPEC §6.2: hex(SHA256( UInt64(fileSize).littleEndian ∥ bytes[0..<min(64K,size)]
 ///            ∥ (size > 128K ? bytes[size-64K..<size] : ∅) ))
+///
+/// Device finding 2026-09-16: the same file received FOUR different keys in
+/// one evening because the bytes were read while a file provider (iCloud /
+/// Dropbox) was still materialising the file — short reads ⇒ different
+/// hashes ⇒ "all my notes are gone". Hence: the read is *coordinated* (which
+/// makes providers finish materialising first), every chunk is verified to be
+/// complete, and there is NO fallback key — an unreadable file yields `nil`
+/// and the caller refuses to open rather than inventing a new identity.
 enum DocumentIdentity {
 
     private static let chunkSize = 64 * 1024
     private static let log = OSLog(subsystem: "com.georgebuhanov.penpdf", category: "DocumentIdentity")
 
-    static func key(for url: URL) -> String {
+    /// `nil` when the file could not be read *completely* right now.
+    static func key(for url: URL) -> String? {
         // Ref-counted: fine to call even if a caller higher up already holds access.
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
 
-        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize else {
-            os_log("DocumentIdentity: could not read file size for %{public}@, falling back to name hash",
-                   log: log, type: .error, url.lastPathComponent)
-            return fallbackKey(for: url)
+        // Ask iCloud to fetch an evicted file; the coordinated read below
+        // blocks until the provider has it (or errors).
+        if let status = try? url.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey]).ubiquitousItemDownloadingStatus,
+           status != .current {
+            try? FileManager.default.startDownloadingUbiquitousItem(at: url)
         }
 
-        guard let handle = try? FileHandle(forReadingFrom: url) else {
-            os_log("DocumentIdentity: could not open %{public}@, falling back to name hash",
-                   log: log, type: .error, url.lastPathComponent)
-            return fallbackKey(for: url)
+        var result: String?
+        var coordinationError: NSError?
+        NSFileCoordinator(filePresenter: nil).coordinate(readingItemAt: url, options: [], error: &coordinationError) { readURL in
+            result = hash(readURL)
         }
+        if let coordinationError {
+            os_log("DocumentIdentity: coordinated read failed for %{public}@: %{public}@",
+                   log: log, type: .error, url.lastPathComponent, coordinationError.localizedDescription)
+        }
+        if result == nil {
+            os_log("DocumentIdentity: %{public}@ not fully readable — refusing to identify it",
+                   log: log, type: .error, url.lastPathComponent)
+        }
+        return result
+    }
+
+    private static func hash(_ url: URL) -> String? {
+        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 0,
+              let handle = try? FileHandle(forReadingFrom: url)
+        else { return nil }
         defer { try? handle.close() }
 
         var hasher = SHA256()
         withUnsafeBytes(of: UInt64(size).littleEndian) { hasher.update(bufferPointer: $0) }
 
         do {
-            if let head = try handle.read(upToCount: min(chunkSize, size)) {
-                hasher.update(data: head)
-            }
+            let headCount = min(chunkSize, size)
+            guard let head = try handle.read(upToCount: headCount), head.count == headCount else { return nil }
+            hasher.update(data: head)
             if size > chunkSize * 2 {
                 try handle.seek(toOffset: UInt64(size - chunkSize))
-                if let tail = try handle.read(upToCount: chunkSize) {
-                    hasher.update(data: tail)
-                }
+                guard let tail = try handle.read(upToCount: chunkSize), tail.count == chunkSize else { return nil }
+                hasher.update(data: tail)
             }
         } catch {
-            os_log("DocumentIdentity: read failed for %{public}@ (%{public}@), falling back to name hash",
-                   log: log, type: .error, url.lastPathComponent, String(describing: error))
-            return fallbackKey(for: url)
+            return nil
         }
-
-        return hexString(hasher.finalize())
-    }
-
-    private static func fallbackKey(for url: URL) -> String {
-        hexString(SHA256.hash(data: Data(url.lastPathComponent.utf8)))
-    }
-
-    private static func hexString<D: Sequence>(_ digest: D) -> String where D.Element == UInt8 {
-        digest.map { String(format: "%02x", $0) }.joined()
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }

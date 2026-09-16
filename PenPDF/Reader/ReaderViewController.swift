@@ -85,11 +85,11 @@ final class ReaderViewController: UIViewController {
     lazy var debugInkToggleButton = ReaderToolbar.debugInkToggleItem(target: self, action: #selector(didTapDebugInkToggle)) // internal for extensions (Ink)
     #endif
 
-    init(fileURL: URL, document: PDFDocument, securityScoped: Bool) {
+    init(fileURL: URL, document: PDFDocument, securityScoped: Bool, identityKey: String) {
         self.fileURL = fileURL
         self.pdfDocument = document
         self.securityScoped = securityScoped
-        let store = DocumentStore(key: DocumentIdentity.key(for: fileURL))
+        let store = DocumentStore(key: identityKey, displayName: fileURL.lastPathComponent, pageCount: document.pageCount)
         self.store = store
         self.ink = ScreenInkController(
             pdfView: pdfView,

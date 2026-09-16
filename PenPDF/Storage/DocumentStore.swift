@@ -48,12 +48,47 @@ final class DocumentStore {
     private var dirtyPages: Set<Int> = []
     private var inkFlushWork: DispatchWorkItem?
 
-    init(key: String) {
-        root = URL.applicationSupportDirectory
+    /// Safety net (device finding 2026-09-16, four keys for one file): if
+    /// this key has no folder yet but an existing folder describes the same
+    /// document (same file name AND page count), adopt that folder instead
+    /// of starting empty — losing every note is far worse than the remote
+    /// chance of two different files sharing name and page count. The
+    /// adoption is recorded in `aliases.json` so it stays stable.
+    init(key: String, displayName: String, pageCount: Int) {
+        let documents = URL.applicationSupportDirectory
             .appending(path: "PenPDF", directoryHint: .isDirectory)
             .appending(path: "Documents", directoryHint: .isDirectory)
-            .appending(path: key, directoryHint: .isDirectory)
+        try? FileManager.default.createDirectory(at: documents, withIntermediateDirectories: true)
+        let resolved = Self.resolveKey(key, displayName: displayName, pageCount: pageCount, in: documents)
+        root = documents.appending(path: resolved, directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+
+    private static func resolveKey(_ key: String, displayName: String, pageCount: Int, in documents: URL) -> String {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: documents.appending(path: key).path) { return key }
+        let aliasesURL = documents.appending(path: "aliases.json")
+        var aliases = (try? Data(contentsOf: aliasesURL)).flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:]
+        if let existing = aliases[key], fm.fileExists(atPath: documents.appending(path: existing).path) { return existing }
+
+        // Look for a folder describing the same document; prefer the most recently updated.
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        var best: (key: String, updatedAt: Date)?
+        for entry in (try? fm.contentsOfDirectory(at: documents, includingPropertiesForKeys: nil)) ?? [] {
+            let candidate = entry.lastPathComponent
+            guard candidate != key, candidate.count == 64,
+                  let data = try? Data(contentsOf: entry.appending(path: "meta.json")),
+                  let meta = try? decoder.decode(Meta.self, from: data),
+                  meta.displayName == displayName, meta.pageCount == pageCount
+            else { continue }
+            if best == nil || meta.updatedAt > best!.updatedAt { best = (candidate, meta.updatedAt) }
+        }
+        guard let adopted = best?.key else { return key }
+        os_log("DocumentStore: adopting folder %{public}@ for new key %{public}@ (%{public}@, %d pages)",
+               log: log, type: .error, String(adopted.prefix(8)), String(key.prefix(8)), displayName, pageCount)
+        aliases[key] = adopted
+        if let data = try? JSONEncoder().encode(aliases) { try? data.write(to: aliasesURL, options: .atomic) }
+        return adopted
     }
 
     deinit {
