@@ -30,7 +30,7 @@ lead_top = bottom - lead_h
 lx = (w // 2) * lead_h / tip_h
 d.polygon([(cx - lx, lead_top), (cx + lx, lead_top), (cx, bottom)], fill=BLACK)
 
-L = L.rotate(45, resample=Image.BICUBIC, center=(cx, N // 2))
+L = L.rotate(-45, resample=Image.BICUBIC, center=(cx, N // 2))
 # shift slightly so the pencil sits centered visually (tip toward bottom-right)
 bg.alpha_composite(L, (int(0 * S), int(0 * S)))
 out = bg.resize((1024, 1024), Image.LANCZOS).convert("RGB")
