@@ -89,6 +89,12 @@ final class PageOverlayView: UIView {
     /// (and the rest of the page's ink, rendered live by PencilKit) is
     /// visible — soft at high zoom only while the pen is down (design note
     /// "Design (per page overlay)").
+    /// S4 experiment: when true the canvas is NEVER shown — it only takes
+    /// Pencil input and holds the drawing; the crisp bitmap is re-rendered on
+    /// every drawing change while the pen is down, so what the user sees is
+    /// always the bitmap (`spec/notes/S4-live-bitmap.md`).
+    var liveBitmap = false
+
     func setMode(_ newMode: Mode) {
         mode = newMode
         switch newMode {
@@ -96,8 +102,13 @@ final class PageOverlayView: UIView {
             canvas.layer.mask = hiddenMask
             inkImageView.isHidden = (inkImageView.image == nil)
         case .drawing:
-            canvas.layer.mask = nil
-            inkImageView.isHidden = true
+            if liveBitmap {
+                canvas.layer.mask = hiddenMask       // stays invisible
+                // bitmap stays visible; live renders replace it continuously
+            } else {
+                canvas.layer.mask = nil
+                inkImageView.isHidden = true
+            }
         }
     }
 
@@ -116,6 +127,10 @@ final class PageOverlayView: UIView {
         inkImageView.autoresizingMask = []
         inkImageView.image = rendered.image
         inkImageView.frame = rendered.rect
+        // S4: the bitmap is the only thing ever shown, so a page that had no
+        // ink (image nil → hidden) must become visible on its first live
+        // render, not wait for pen-up.
+        if liveBitmap { inkImageView.isHidden = false }
     }
 
     /// Ink off (`canvas.isUserInteractionEnabled == false`, FR-18a debug

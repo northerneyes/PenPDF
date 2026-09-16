@@ -99,6 +99,7 @@ final class InkOverlayCoordinator: NSObject, PDFPageOverlayViewProvider, PKCanva
         toolPicker.addObserver(canvas)
 
         let overlay = PageOverlayView(canvas: canvas)
+        overlay.liveBitmap = Self.liveBitmapEnabled
         overlay.setMode(.idle)
         liveOverlays[index] = overlay
 
@@ -150,6 +151,17 @@ final class InkOverlayCoordinator: NSObject, PDFPageOverlayViewProvider, PKCanva
     /// pen-up if a change already arrived mid-gesture); if nothing changes at
     /// all (eraser on empty space, lasso tap) a short fallback returns the
     /// overlay to idle — the existing image is still valid.
+    /// S4 experiment (`spec/notes/S4-live-bitmap.md`): render the crisp
+    /// bitmap on EVERY drawing change while the pen is down, instead of
+    /// showing the (bitmap-magnified, blurry) live canvas. Bounded to one
+    /// render in flight per page: if a change arrives while a render is
+    /// running, the page is marked dirty and the newest drawing is rendered
+    /// as soon as the running one lands — lag is at most one render, never a
+    /// growing queue. One flag reverts to S2 behaviour.
+    static let liveBitmapEnabled = true
+    private var liveRenderInFlight: Set<Int> = []
+    private var liveRenderDirty: Set<Int> = []
+
     private var pagesWithPenDown: Set<Int> = []
     private var pagesChangedWhilePenDown: Set<Int> = []
     private var idleFallbacks: [Int: DispatchWorkItem] = [:]
@@ -198,8 +210,8 @@ final class InkOverlayCoordinator: NSObject, PDFPageOverlayViewProvider, PKCanva
         store.update(canvas.drawing, forPage: pageIndex)
 
         if pagesWithPenDown.contains(pageIndex) {
-            // Live canvas is showing; remember to render at pen-up.
             pagesChangedWhilePenDown.insert(pageIndex)
+            if Self.liveBitmapEnabled { liveRender(pageIndex: pageIndex, canvas: canvas) }
             return
         }
 
@@ -208,6 +220,26 @@ final class InkOverlayCoordinator: NSObject, PDFPageOverlayViewProvider, PKCanva
         idleFallbacks.removeValue(forKey: pageIndex)?.cancel()
         guard let overlay = liveOverlays[pageIndex], let pdfView = currentPDFView else { return }
         render(pageIndex: pageIndex, drawing: canvas.drawing, overlay: overlay, pdfView: pdfView, then: .idle)
+    }
+
+    /// S4: in-gesture render of the whole page drawing (settled + the stroke
+    /// in progress, which PencilKit exposes in `canvas.drawing` as it goes).
+    private func liveRender(pageIndex: Int, canvas: PageCanvasView) {
+        guard let overlay = liveOverlays[pageIndex], let pdfView = currentPDFView else { return }
+        if liveRenderInFlight.contains(pageIndex) {
+            liveRenderDirty.insert(pageIndex)
+            return
+        }
+        liveRenderInFlight.insert(pageIndex)
+        liveRenderDirty.remove(pageIndex)
+        render(pageIndex: pageIndex, drawing: canvas.drawing, overlay: overlay, pdfView: pdfView, then: nil) { [weak self, weak canvas] in
+            guard let self else { return }
+            self.liveRenderInFlight.remove(pageIndex)
+            if self.liveRenderDirty.remove(pageIndex) != nil, let canvas,
+               self.pagesWithPenDown.contains(pageIndex) {
+                self.liveRender(pageIndex: pageIndex, canvas: canvas)
+            }
+        }
     }
 
     // MARK: - Rendering (S2 Option B, design note "Rendering the image")
@@ -221,7 +253,8 @@ final class InkOverlayCoordinator: NSObject, PDFPageOverlayViewProvider, PKCanva
         drawing: PKDrawing,
         overlay: PageOverlayView,
         pdfView: PDFView,
-        then mode: PageOverlayView.Mode?
+        then mode: PageOverlayView.Mode?,
+        completion: (() -> Void)? = nil
     ) {
         let z = magnification(of: overlay, in: pdfView)
         let renderScale = min(UIScreen.main.scale * z, UIScreen.main.scale * Self.maxZoomForRender)
@@ -230,6 +263,7 @@ final class InkOverlayCoordinator: NSObject, PDFPageOverlayViewProvider, PKCanva
         guard !drawing.strokes.isEmpty, !rect.isNull, !rect.isEmpty else {
             overlay.apply(rendered: nil)
             if let mode { overlay.setMode(mode) }
+            completion?()
             return
         }
 
@@ -242,10 +276,11 @@ final class InkOverlayCoordinator: NSObject, PDFPageOverlayViewProvider, PKCanva
                 guard let self, let overlay,
                       self.liveOverlays[pageIndex] === overlay,
                       self.renderGeneration[pageIndex] == generation
-                else { return }
+                else { completion?(); return }
                 overlay.apply(rendered: RenderedInk(image: image, rect: rect))
                 self.lastRenderScale[pageIndex] = renderScale
                 if let mode { overlay.setMode(mode) }
+                completion?()
             }
         }
     }
