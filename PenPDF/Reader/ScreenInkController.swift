@@ -164,7 +164,21 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
         let contentSize = CGSize(width: max(scrollView.contentSize.width, size.width),
                                  height: max(scrollView.contentSize.height, size.height))
         if canvas.contentSize != contentSize { canvas.contentSize = contentSize }
+        // The canvas is a UIScrollView and clamps `contentOffset` to its own
+        // content range — but PDFKit's offset legitimately goes outside it
+        // (negative under the glass bar, past the end into the bottom inset,
+        // and transiently when Lock disables scrolling and insets are
+        // recomputed). A clamped mirror shifted the ink by the clamped amount
+        // (owner: "press Lock and the writing jumps down"). Generous insets
+        // make every reachable offset valid.
+        let margin = max(size.width, size.height) * 2
+        let inset = UIEdgeInsets(top: margin, left: margin, bottom: margin, right: margin)
+        if canvas.contentInset != inset { canvas.contentInset = inset }
         if canvas.contentOffset != offset { canvas.contentOffset = offset }
+        if canvas.contentOffset != offset {
+            os_log("ScreenInkController: canvas offset mirror clamped: wanted (%.1f, %.1f) got (%.1f, %.1f)",
+                   log: Self.log, type: .error, offset.x, offset.y, canvas.contentOffset.x, canvas.contentOffset.y)
+        }
     }
 
     private static func firstScrollView(in view: UIView) -> UIScrollView? {
