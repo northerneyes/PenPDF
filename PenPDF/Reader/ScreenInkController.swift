@@ -66,6 +66,7 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
 
     private weak var hostScrollView: UIScrollView?
     private var contentOffsetObservation: NSKeyValueObservation?
+    private var insetObservations: [NSKeyValueObservation] = []
     /// During a live pinch PDFKit scales its document view with the scroll
     /// view's zoom transform while `scaleFactor` and `contentOffset` update
     /// on their own schedules — re-projecting per frame from those makes the
@@ -129,6 +130,13 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
             canvas.removeFromSuperview()
             scrollView.addSubview(canvas)                 // last ⇒ above the document view
             scrollView.pinchGestureRecognizer?.addTarget(self, action: #selector(hostPinchChanged(_:)))
+            // Insets change without the offset moving (e.g. the nav bar's
+            // scroll-edge logic when Lock disables scrolling) — the page moves
+            // under the bar and the ink must be re-projected.
+            insetObservations = [
+                scrollView.observe(\.contentInset, options: [.new]) { [weak self] _, _ in self?.setNeedsSync() },
+                scrollView.observe(\.contentSize, options: [.new]) { [weak self] _, _ in self?.followScrollView(); self?.setNeedsSync() },
+            ]
             contentOffsetObservation?.invalidate()
             contentOffsetObservation = scrollView.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in
                 // Synchronous with the scroll: the frame/offset update lands
@@ -249,6 +257,7 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
         isSyncingProgrammatically = false
         displayedStrokeCount = strokes.count
         if !isPinching, canvas.isHidden { canvas.isHidden = false }
+        writeDiagnostics("sync")
     }
 
     /// Coalesces any number of triggers within one run-loop turn.
@@ -441,6 +450,30 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
         pendingGestureEnd?.cancel()
         pendingGestureEnd = nil
         commit()
+    }
+
+    // MARK: - Diagnostics (readable live: devicectl copy from the app container)
+
+    /// Appends a one-line geometry snapshot to `Documents/ink-diag.log` in the
+    /// store root. Called on lock/unlock and after every sync so the owner's
+    /// "ink jumped" reports can be read without a debugger.
+    func writeDiagnostics(_ event: String) {
+        guard let scrollView = hostScrollView else { return }
+        var pageInfo = "no page"
+        if let page = visiblePages.first, let t = pageTransform(page) {
+            let index = document.index(for: page)
+            pageInfo = "page\(index) origin=(\(Int(t.tx)),\(Int(t.ty))) scale=\(String(format: "%.3f", t.a))"
+        }
+        let line = "\(ISO8601DateFormatter().string(from: Date())) \(event) | sv.offset=(\(Int(scrollView.contentOffset.x)),\(Int(scrollView.contentOffset.y))) sv.inset=(\(Int(scrollView.contentInset.top)),\(Int(scrollView.contentInset.bottom))) sv.adj=(\(Int(scrollView.adjustedContentInset.top)),\(Int(scrollView.adjustedContentInset.bottom))) sv.size=\(Int(scrollView.contentSize.height)) sv.enabled=\(scrollView.isScrollEnabled) | canvas.frame=(\(Int(canvas.frame.origin.x)),\(Int(canvas.frame.origin.y))) canvas.offset=(\(Int(canvas.contentOffset.x)),\(Int(canvas.contentOffset.y))) canvas.bounds=\(Int(canvas.bounds.height)) | \(pageInfo) | pdfView.scale=\(String(format: "%.3f", pdfView.scaleFactor))\n"
+        let url = URL.applicationSupportDirectory
+            .appending(path: "PenPDF", directoryHint: .isDirectory)
+            .appending(path: "Documents", directoryHint: .isDirectory)
+            .appending(path: "ink-diag.log")
+        if let handle = try? FileHandle(forWritingTo: url) {
+            try? handle.seekToEnd(); try? handle.write(contentsOf: Data(line.utf8)); try? handle.close()
+        } else {
+            try? Data(line.utf8).write(to: url)
+        }
     }
 
     // MARK: - Tool palette (FR-18)
