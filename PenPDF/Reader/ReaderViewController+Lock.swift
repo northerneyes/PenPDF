@@ -12,7 +12,8 @@ extension ReaderViewController {
     /// unlocked, is a no-op inside `InteractionLock`.
     func applyLockState() {
         ink.writeDiagnostics("lock-toggle-before locked=\(AppSettings.isLocked)")
-        DispatchQueue.main.async { [weak self] in self?.ink.writeDiagnostics("lock-toggle-after") }
+        defer { ink.remirrorScrollView() }
+        DispatchQueue.main.async { [weak self] in self?.ink.remirrorScrollView(); self?.ink.writeDiagnostics("lock-toggle-after") }
         if AppSettings.isLocked {
             if !interactionLock.isLocked {
                 interactionLock.lock(pdfView)

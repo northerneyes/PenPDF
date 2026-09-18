@@ -53,6 +53,24 @@ final class ScreenCanvasView: PKCanvasView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    /// Only `ScreenInkController` may move this canvas's content. Device log
+    /// 2026-09-18: when Lock disabled scrolling on PDFKit's scroll view, the
+    /// navigation bar's scroll-edge logic picked THIS scroll view as its
+    /// content view and shifted its `contentOffset` by the bar inset (−86 pt)
+    /// — the ink jumped, and jumped back on unlock. Any offset write that
+    /// isn't ours is ignored.
+    var isControllerSettingOffset = false
+
+    override var contentOffset: CGPoint {
+        get { super.contentOffset }
+        set { if isControllerSettingOffset { super.contentOffset = newValue } }
+    }
+
+    override func setContentOffset(_ contentOffset: CGPoint, animated: Bool) {
+        guard isControllerSettingOffset else { return }
+        super.setContentOffset(contentOffset, animated: false)
+    }
+
     /// Never steal first responder. The tool picker is anchored to the
     /// Reader's `ResponderView`; if the canvas grabbed first responder
     /// mid-touch the palette would hide right as a stroke starts.

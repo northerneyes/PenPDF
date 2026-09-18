@@ -164,7 +164,11 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
         let contentSize = CGSize(width: max(scrollView.contentSize.width, size.width),
                                  height: max(scrollView.contentSize.height, size.height))
         if canvas.contentSize != contentSize { canvas.contentSize = contentSize }
-        if canvas.contentOffset != offset { canvas.contentOffset = offset }
+        if canvas.contentOffset != offset {
+            canvas.isControllerSettingOffset = true
+            canvas.contentOffset = offset
+            canvas.isControllerSettingOffset = false
+        }
     }
 
     private static func firstScrollView(in view: UIView) -> UIScrollView? {
@@ -429,6 +433,10 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
         pendingGestureEnd = nil
         commit()
     }
+
+    /// Re-asserts the canvas geometry against the host scroll view (used
+    /// after Lock/unlock, when UIKit may have touched the canvas).
+    func remirrorScrollView() { followScrollView() }
 
     // MARK: - Diagnostics (readable live: devicectl copy from the app container)
 
