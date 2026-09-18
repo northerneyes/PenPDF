@@ -12,12 +12,7 @@ extension ReaderViewController {
     /// unlocked, is a no-op inside `InteractionLock`.
     func applyLockState() {
         ink.writeDiagnostics("lock-toggle-before locked=\(AppSettings.isLocked)")
-        defer {
-            // Disabling/enabling scrolling can change the scroll view's insets
-            // (nav-bar scroll-edge logic) without moving the offset; re-project.
-            ink.setNeedsSync()
-            DispatchQueue.main.async { [weak self] in self?.ink.writeDiagnostics("lock-toggle-after") }
-        }
+        DispatchQueue.main.async { [weak self] in self?.ink.writeDiagnostics("lock-toggle-after") }
         if AppSettings.isLocked {
             if !interactionLock.isLocked {
                 interactionLock.lock(pdfView)

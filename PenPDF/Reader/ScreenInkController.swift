@@ -66,7 +66,6 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
 
     private weak var hostScrollView: UIScrollView?
     private var contentOffsetObservation: NSKeyValueObservation?
-    private var insetObservations: [NSKeyValueObservation] = []
     /// During a live pinch PDFKit scales its document view with the scroll
     /// view's zoom transform while `scaleFactor` and `contentOffset` update
     /// on their own schedules — re-projecting per frame from those makes the
@@ -74,18 +73,6 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
     /// duration of the pinch and re-shown after the first sync that follows.
     private var isPinching = false
     private var syncScheduled = false
-    /// Signature of the last projection actually assigned to the canvas:
-    /// visible pages, their transforms, and the ink version. Re-assigning an
-    /// unchanged drawing made PencilKit re-render (a visible flash on Lock)
-    /// and ran ~70×/s during scrolling for nothing.
-    private var lastSignature = ""
-    /// Bumped on every store change made through this controller.
-    private var inkVersion = 0
-    /// Per-frame geometry watch: PDFKit moves pages without any observable
-    /// event (device log 2026-09-18: page x-origin jumped 8 → 169 pt with
-    /// no scroll/zoom/size change, leaving the ink 161 pt off until the next
-    /// incidental sync). One cheap transform check per frame catches it.
-    private var displayLink: CADisplayLink?
     private var scaleChangeObserver: NSObjectProtocol?
     private var pageChangeObserver: NSObjectProtocol?
 
@@ -119,23 +106,12 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
         pageChangeObserver = NotificationCenter.default.addObserver(
             forName: .PDFViewPageChanged, object: pdfView, queue: .main
         ) { [weak self] _ in self?.setNeedsSync() }
-
-        let link = CADisplayLink(target: self, selector: #selector(displayTick))
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 120, preferred: 60)
-        link.add(to: .main, forMode: .common)
-        displayLink = link
-    }
-
-    @objc private func displayTick() {
-        // `syncDisplay` is a no-op unless the projection signature changed.
-        syncDisplay()
     }
 
     deinit {
         if let scaleChangeObserver { NotificationCenter.default.removeObserver(scaleChangeObserver) }
         if let pageChangeObserver { NotificationCenter.default.removeObserver(pageChangeObserver) }
         contentOffsetObservation?.invalidate()
-        displayLink?.invalidate()
         pendingGestureEnd?.cancel()
         toolPicker.removeObserver(self)
     }
@@ -153,13 +129,6 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
             canvas.removeFromSuperview()
             scrollView.addSubview(canvas)                 // last ⇒ above the document view
             scrollView.pinchGestureRecognizer?.addTarget(self, action: #selector(hostPinchChanged(_:)))
-            // Insets change without the offset moving (e.g. the nav bar's
-            // scroll-edge logic when Lock disables scrolling) — the page moves
-            // under the bar and the ink must be re-projected.
-            insetObservations = [
-                scrollView.observe(\.contentInset, options: [.new]) { [weak self] _, _ in self?.setNeedsSync() },
-                scrollView.observe(\.contentSize, options: [.new]) { [weak self] _, _ in self?.followScrollView(); self?.setNeedsSync() },
-            ]
             contentOffsetObservation?.invalidate()
             contentOffsetObservation = scrollView.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in
                 // Synchronous with the scroll: the frame/offset update lands
@@ -195,21 +164,7 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
         let contentSize = CGSize(width: max(scrollView.contentSize.width, size.width),
                                  height: max(scrollView.contentSize.height, size.height))
         if canvas.contentSize != contentSize { canvas.contentSize = contentSize }
-        // The canvas is a UIScrollView and clamps `contentOffset` to its own
-        // content range — but PDFKit's offset legitimately goes outside it
-        // (negative under the glass bar, past the end into the bottom inset,
-        // and transiently when Lock disables scrolling and insets are
-        // recomputed). A clamped mirror shifted the ink by the clamped amount
-        // (owner: "press Lock and the writing jumps down"). Generous insets
-        // make every reachable offset valid.
-        let margin = max(size.width, size.height) * 2
-        let inset = UIEdgeInsets(top: margin, left: margin, bottom: margin, right: margin)
-        if canvas.contentInset != inset { canvas.contentInset = inset }
         if canvas.contentOffset != offset { canvas.contentOffset = offset }
-        if canvas.contentOffset != offset {
-            os_log("ScreenInkController: canvas offset mirror clamped: wanted (%.1f, %.1f) got (%.1f, %.1f)",
-                   log: Self.log, type: .error, offset.x, offset.y, canvas.contentOffset.x, canvas.contentOffset.y)
-        }
     }
 
     private static func firstScrollView(in view: UIView) -> UIScrollView? {
@@ -266,24 +221,12 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
         attachIfNeeded()
         guard !penDown else { syncPendingAfterGesture = true; return }
 
-        var pages: [(index: Int, transform: CGAffineTransform)] = []
-        var signature = "v\(inkVersion)"
+        var strokes: [PKStroke] = []
         for page in visiblePages {
             let index = document.index(for: page)
-            guard index != NSNotFound, let transform = pageTransform(page) else { continue }
-            pages.append((index, transform))
-            signature += "|\(index):\(Int(transform.tx * 4)),\(Int(transform.ty * 4)),\(Int(transform.a * 1000))"
-        }
-        guard signature != lastSignature else {
-            if !isPinching, canvas.isHidden { canvas.isHidden = false }
-            return
-        }
-        lastSignature = signature
-
-        var strokes: [PKStroke] = []
-        for (index, transform) in pages {
+            guard index != NSNotFound else { continue }
             let stored = store.drawing(forPage: index)
-            guard !stored.strokes.isEmpty else { continue }
+            guard !stored.strokes.isEmpty, let transform = pageTransform(page) else { continue }
             strokes.append(contentsOf: stored.transformed(using: transform).strokes)
         }
 
@@ -385,21 +328,7 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
             commitRebuildVisiblePages()
         }
         displayedStrokeCount = canvas.drawing.strokes.count
-        // The canvas already shows exactly the committed result; refresh the
-        // signature to the current geometry + version so the next tick doesn't
-        // re-assign (flash) unless the geometry actually changed.
-        lastSignature = currentSignature()
         applyPendingSyncIfNeeded()
-    }
-
-    private func currentSignature() -> String {
-        var signature = "v\(inkVersion)"
-        for page in visiblePages {
-            let index = document.index(for: page)
-            guard index != NSNotFound, let transform = pageTransform(page) else { continue }
-            signature += "|\(index):\(Int(transform.tx * 4)),\(Int(transform.ty * 4)),\(Int(transform.a * 1000))"
-        }
-        return signature
     }
 
     private func applyPendingSyncIfNeeded() {
@@ -431,7 +360,7 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
             let previous = store.drawing(forPage: index)
             let next = PKDrawing(strokes: previous.strokes + pageSpaceNew.strokes)
             registerUndo(pageIndex: index, previous: previous, next: next)
-            inkVersion += 1; store.update(next, forPage: index)
+            store.update(next, forPage: index)
         }
     }
 
@@ -450,7 +379,7 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
             let previous = store.drawing(forPage: index)
             guard drawingsDiffer(previous, next) else { continue }
             registerUndo(pageIndex: index, previous: previous, next: next)
-            inkVersion += 1; store.update(next, forPage: index)
+            store.update(next, forPage: index)
         }
     }
 
@@ -486,7 +415,7 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
         undoManager.registerUndo(withTarget: self) { controller in
             controller.applyPageDrawing(redo, pageIndex: pageIndex, redo: drawing)
         }
-        inkVersion += 1; store.update(drawing, forPage: pageIndex)
+        store.update(drawing, forPage: pageIndex)
         setNeedsSync()
     }
 
@@ -505,7 +434,8 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
 
     /// Appends a one-line geometry snapshot to `Documents/ink-diag.log` in the
     /// store root. Called on lock/unlock and after every sync so the owner's
-    /// "ink jumped" reports can be read without a debugger.
+    /// "ink jumped" reports can be read without a debugger. Logging only —
+    /// no behaviour change (owner's request 2026-09-18).
     func writeDiagnostics(_ event: String) {
         guard let scrollView = hostScrollView else { return }
         var pageInfo = "no page"
@@ -513,7 +443,7 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
             let index = document.index(for: page)
             pageInfo = "page\(index) origin=(\(Int(t.tx)),\(Int(t.ty))) scale=\(String(format: "%.3f", t.a))"
         }
-        let line = "\(ISO8601DateFormatter().string(from: Date())) \(event) | sv.offset=(\(Int(scrollView.contentOffset.x)),\(Int(scrollView.contentOffset.y))) sv.inset=(\(Int(scrollView.contentInset.top)),\(Int(scrollView.contentInset.bottom))) sv.adj=(\(Int(scrollView.adjustedContentInset.top)),\(Int(scrollView.adjustedContentInset.bottom))) sv.size=\(Int(scrollView.contentSize.height)) sv.enabled=\(scrollView.isScrollEnabled) | canvas.frame=(\(Int(canvas.frame.origin.x)),\(Int(canvas.frame.origin.y))) canvas.offset=(\(Int(canvas.contentOffset.x)),\(Int(canvas.contentOffset.y))) canvas.bounds=\(Int(canvas.bounds.height)) | \(pageInfo) | pdfView.scale=\(String(format: "%.3f", pdfView.scaleFactor))\n"
+        let line = "\(ISO8601DateFormatter().string(from: Date())) \(event) | sv.offset=(\(Int(scrollView.contentOffset.x)),\(Int(scrollView.contentOffset.y))) sv.inset=(\(Int(scrollView.contentInset.top)),\(Int(scrollView.contentInset.bottom))) sv.adj=(\(Int(scrollView.adjustedContentInset.top)),\(Int(scrollView.adjustedContentInset.bottom))) sv.size=\(Int(scrollView.contentSize.height)) sv.enabled=\(scrollView.isScrollEnabled) | canvas.frame=(\(Int(canvas.frame.origin.x)),\(Int(canvas.frame.origin.y))) canvas.offset=(\(Int(canvas.contentOffset.x)),\(Int(canvas.contentOffset.y))) canvas.bounds=\(Int(canvas.bounds.height)) | \(pageInfo) | pdfView.scale=\(String(format: "%.3f", pdfView.scaleFactor)) pdfView.bounds=\(Int(pdfView.bounds.width))x\(Int(pdfView.bounds.height))\n"
         let url = URL.applicationSupportDirectory
             .appending(path: "PenPDF", directoryHint: .isDirectory)
             .appending(path: "Documents", directoryHint: .isDirectory)
