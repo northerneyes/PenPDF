@@ -1,2 +1,3 @@
 - 2026-09-16 · 1eb8dd9 (tag stable-drawing-v1) · owner: writing/eraser/undo pass; pinch fix + single-finger pan pending test
 - 2026-09-16 · 93106e4 (main, stable-drawing-v1 + pinch-hide) · owner: pinch-hide accepted, single-finger scroll back, writing unchanged → PASS
+- 2026-09-18 · 3cbd2ea (main) · owner: rotate→lock→unlock no jump — PASS; writing/eraser unchanged
