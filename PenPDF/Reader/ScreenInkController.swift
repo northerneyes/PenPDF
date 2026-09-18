@@ -74,6 +74,18 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
     /// duration of the pinch and re-shown after the first sync that follows.
     private var isPinching = false
     private var syncScheduled = false
+    /// Signature of the last projection actually assigned to the canvas:
+    /// visible pages, their transforms, and the ink version. Re-assigning an
+    /// unchanged drawing made PencilKit re-render (a visible flash on Lock)
+    /// and ran ~70×/s during scrolling for nothing.
+    private var lastSignature = ""
+    /// Bumped on every store change made through this controller.
+    private var inkVersion = 0
+    /// Per-frame geometry watch: PDFKit moves pages without any observable
+    /// event (device log 2026-09-18: page x-origin jumped 8 → 169 pt with
+    /// no scroll/zoom/size change, leaving the ink 161 pt off until the next
+    /// incidental sync). One cheap transform check per frame catches it.
+    private var displayLink: CADisplayLink?
     private var scaleChangeObserver: NSObjectProtocol?
     private var pageChangeObserver: NSObjectProtocol?
 
@@ -107,12 +119,23 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
         pageChangeObserver = NotificationCenter.default.addObserver(
             forName: .PDFViewPageChanged, object: pdfView, queue: .main
         ) { [weak self] _ in self?.setNeedsSync() }
+
+        let link = CADisplayLink(target: self, selector: #selector(displayTick))
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 120, preferred: 60)
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+    }
+
+    @objc private func displayTick() {
+        // `syncDisplay` is a no-op unless the projection signature changed.
+        syncDisplay()
     }
 
     deinit {
         if let scaleChangeObserver { NotificationCenter.default.removeObserver(scaleChangeObserver) }
         if let pageChangeObserver { NotificationCenter.default.removeObserver(pageChangeObserver) }
         contentOffsetObservation?.invalidate()
+        displayLink?.invalidate()
         pendingGestureEnd?.cancel()
         toolPicker.removeObserver(self)
     }
@@ -243,12 +266,24 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
         attachIfNeeded()
         guard !penDown else { syncPendingAfterGesture = true; return }
 
-        var strokes: [PKStroke] = []
+        var pages: [(index: Int, transform: CGAffineTransform)] = []
+        var signature = "v\(inkVersion)"
         for page in visiblePages {
             let index = document.index(for: page)
-            guard index != NSNotFound else { continue }
+            guard index != NSNotFound, let transform = pageTransform(page) else { continue }
+            pages.append((index, transform))
+            signature += "|\(index):\(Int(transform.tx * 4)),\(Int(transform.ty * 4)),\(Int(transform.a * 1000))"
+        }
+        guard signature != lastSignature else {
+            if !isPinching, canvas.isHidden { canvas.isHidden = false }
+            return
+        }
+        lastSignature = signature
+
+        var strokes: [PKStroke] = []
+        for (index, transform) in pages {
             let stored = store.drawing(forPage: index)
-            guard !stored.strokes.isEmpty, let transform = pageTransform(page) else { continue }
+            guard !stored.strokes.isEmpty else { continue }
             strokes.append(contentsOf: stored.transformed(using: transform).strokes)
         }
 
@@ -350,7 +385,21 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
             commitRebuildVisiblePages()
         }
         displayedStrokeCount = canvas.drawing.strokes.count
+        // The canvas already shows exactly the committed result; refresh the
+        // signature to the current geometry + version so the next tick doesn't
+        // re-assign (flash) unless the geometry actually changed.
+        lastSignature = currentSignature()
         applyPendingSyncIfNeeded()
+    }
+
+    private func currentSignature() -> String {
+        var signature = "v\(inkVersion)"
+        for page in visiblePages {
+            let index = document.index(for: page)
+            guard index != NSNotFound, let transform = pageTransform(page) else { continue }
+            signature += "|\(index):\(Int(transform.tx * 4)),\(Int(transform.ty * 4)),\(Int(transform.a * 1000))"
+        }
+        return signature
     }
 
     private func applyPendingSyncIfNeeded() {
@@ -382,7 +431,7 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
             let previous = store.drawing(forPage: index)
             let next = PKDrawing(strokes: previous.strokes + pageSpaceNew.strokes)
             registerUndo(pageIndex: index, previous: previous, next: next)
-            store.update(next, forPage: index)
+            inkVersion += 1; store.update(next, forPage: index)
         }
     }
 
@@ -401,7 +450,7 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
             let previous = store.drawing(forPage: index)
             guard drawingsDiffer(previous, next) else { continue }
             registerUndo(pageIndex: index, previous: previous, next: next)
-            store.update(next, forPage: index)
+            inkVersion += 1; store.update(next, forPage: index)
         }
     }
 
@@ -437,7 +486,7 @@ final class ScreenInkController: NSObject, PKCanvasViewDelegate, PKToolPickerObs
         undoManager.registerUndo(withTarget: self) { controller in
             controller.applyPageDrawing(redo, pageIndex: pageIndex, redo: drawing)
         }
-        store.update(drawing, forPage: pageIndex)
+        inkVersion += 1; store.update(drawing, forPage: pageIndex)
         setNeedsSync()
     }
 
